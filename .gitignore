@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+*.log
+npm-debug.log*
+
+# Build output
+dist/
+.next/
+build/
+out/
+
+# Environment (never commit real secrets)
+.env
+.env.local
+.env.prod
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Backend artifacts
+backend/.nest/
+backend/dist/
+
+# MinIO / runtime volumes (if mounted locally)
+/minio-data/
+
+# Scripts de diagnóstico ad-hoc que contienen una credencial real hardcodeada
+# (info@solidocs.com.ar). NO versionar: primero rotar la contraseña real.
+frontend/diag-tech.js
+frontend/test-e2e.js
+frontend/test-suggest.js
+frontend/verify-guardado.js
+
+# Backups / instaladores / dumps pesados (no son código, no al repo)
+*.tar.gz
+*.dump
+*.msi
+*.exe
+minio_data_backup.tar.gz
+ops_msp_backup.dump
+
+# Datos / respaldos pesados (no versionar)
+/backup/
+/import/
+backend/import/
+
+# Dumps de profiling (no versionar)
+*.cpuprofile
+
+# Scripts/ad-hoc de diagnóstico del backend (no versionar: una sola vez)
+# co.js hardcodea credenciales dev de MinIO; el resto son pruebas puntuales.
+# verify-lazy*.js son utilidades para depurar hashes de Zammad (toman --secret
+# por argumento; volver a crearlos si hicieran falta).
+backend/co.js
+backend/sla-test.js
+backend/sla-test2.js
+backend/tmp-verify.js
+backend/verify-lazy.js
+backend/verify-lazy-contact.js
+backend/diag-test.ts

@@ -1,0 +1,28 @@
+{
+  "name": "ops-msp-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "14.2.33",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
+    "socket.io-client": "^4.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.8",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.5.4"
+  },
+  "optionalDependencies": {
+    "@next/swc-linux-x64-musl": "16.15.0"
+  }
+}

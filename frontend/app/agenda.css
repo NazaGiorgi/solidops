@@ -1,0 +1,166 @@
+/* =====================================================================
+   Agenda — day / week / month grids. These classes drive the columnar
+   drag & drop layout. Kept in this separate file so a rewrite of
+   globals.css can never wipe the agenda styling again.
+   ===================================================================== */
+
+/* --- Week: 7 equal day columns --- */
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  gap: 6px;
+  min-height: 240px;
+}
+@media (max-width: 800px) {
+  .week-grid { grid-template-columns: repeat(7, minmax(72px, 1fr)); overflow-x: auto; }
+}
+.week-day {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+}
+.week-day:hover { border-color: var(--border-strong); }
+.week-day-head {
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  text-align: center;
+}
+.week-day-head.today { background: var(--blue-suave); color: var(--blue); }
+.week-day-name {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+.week-day-head.today .week-day-name { color: var(--blue); }
+.week-day-body {
+  flex: 1;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* --- Day: single full-width column --- */
+.day-grid {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Month: 7-day cells, no hour grid --- */
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(90px, 1fr));
+  gap: 4px;
+}
+@media (max-width: 800px) {
+  .month-grid { grid-template-columns: repeat(7, minmax(60px, 1fr)); overflow-x: auto; }
+}
+/* Encabezado fijo con los nombres de los días de la semana (lunes..domingo). */
+.month-week-header {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(90px, 1fr));
+  gap: 4px;
+  margin-bottom: 4px;
+}
+@media (max-width: 800px) {
+  .month-week-header { grid-template-columns: repeat(7, minmax(60px, 1fr)); }
+}
+.month-week-header-cell {
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: capitalize;
+  text-align: center;
+}
+.month-day {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.month-day.outside { opacity: 0.45; background: var(--bg-subtle); }
+.month-day.today { border-color: var(--blue); }
+.month-day-head {
+  padding: 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+}
+.month-day-body { flex: 1; padding: 4px; display: flex; flex-direction: column; gap: 3px; }
+
+/* --- Appointment chips --- */
+.appt-chip {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 6px 8px;
+  cursor: grab;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+.appt-chip:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+}
+.appt-chip:active { cursor: grabbing; }
+.appt-chip-sm { padding: 3px 6px; font-size: 12px; }
+.appt-chip-creator {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.appt-chip-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+.appt-edit-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px;
+  border-radius: 4px;
+}
+.appt-edit-btn:hover { color: var(--text); background: var(--gray-suave); }
+.appt-assign {
+  margin-top: 6px;
+  max-width: 100%;
+  font-size: 12px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+/* Visible drop target feedback on drag */
+.week-day.drag-over,
+.day-grid.drag-over,
+.month-day.drag-over { outline: 2px dashed var(--blue); outline-offset: -2px; }

@@ -1,0 +1,40 @@
+# =============================================================================
+# Caddyfile — PRODUCTION ONLY
+#
+# Caddy does NOT terminate TLS here. NPM (Nginx Proxy Manager) on the Proxmox
+# host already answers the public HTTPS and holds the certificate, forwarding
+# plain HTTP to this container over the internal network. So Caddy listens on
+# :80 without a site address, without a `tls` block and without an `email`
+# directive (no ACME/Let's Encrypt). This is the stable post-incident state —
+# do not re-add {$DOMAIN}, `tls` or `email`.
+#
+# Caddy evaluates `handle` blocks in declaration order, so the specific path
+# matchers MUST come before the catch-all frontend rule.
+# =============================================================================
+
+:80 {
+  encode zstd gzip
+
+  # Security headers
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options SAMEORIGIN
+    Referrer-Policy strict-origin-when-cross-origin
+    Strict-Transport-Security max-age=31536000; includeSubDomains
+  }
+
+  # --- Backend REST API ---
+  handle /api/* {
+    reverse_proxy backend:4000
+  }
+
+  # --- Backend WebSocket (Socket.IO) ---
+  handle /socket.io/* {
+    reverse_proxy backend:4000
+  }
+
+  # --- Frontend (Next.js) — catch-all, declared LAST ---
+  handle {
+    reverse_proxy frontend:3000
+  }
+}

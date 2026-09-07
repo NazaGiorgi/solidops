@@ -1,0 +1,165 @@
+/* =====================================================================
+   Shared UI components: modal overlay, notices, toasts, list rows.
+   Kept separate from globals.css so a rewrite of globals.css can never
+   wipe these. Imported in app/layout.tsx alongside globals.css.
+   ===================================================================== */
+
+/* --- Modal overlay + dialog --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+  z-index: 60;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+  width: 100%;
+  max-width: 560px;
+  padding: 20px 22px;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* --- Notices (info banners + dismissible errors) --- */
+.notice {
+  padding: 10px 12px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.notice-error {
+  background: var(--red-suave);
+  color: #b91c1c;
+  border-color: var(--red-border);
+}
+.notice-shadow {
+  background: var(--amber-suave);
+  color: #92400e;
+  border-color: var(--amber-border);
+  font-size: 13px;
+}
+.notice-flex {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.notice-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.notice-close:hover { background: rgba(0, 0, 0, 0.06); }
+
+/* --- Toast stack (top-right) --- */
+.toast-viewport {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 70;
+  max-width: 340px;
+  width: calc(100vw - 32px);
+}
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  padding: 12px 14px;
+  animation: toast-in 0.18s ease;
+}
+.toast-info { border-left-color: var(--blue); }
+.toast-success { border-left-color: var(--green); }
+.toast-warning { border-left-color: var(--amber); }
+.toast-alarm {
+  border-left-color: var(--red);
+  box-shadow: 0 0 0 1px var(--red-border), 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+.toast-content { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.toast-title { font-weight: 600; font-size: 14px; }
+.toast-body { font-size: 13px; color: var(--text-soft); }
+.toast-action { font-size: 13px; margin-top: 2px; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Result badges (mailbox test) --- */
+.result-ok { color: var(--green); font-weight: 600; }
+.result-bad { color: var(--red); font-weight: 600; }
+
+/* --- Agenda task row in the task panel --- */
+.task-row {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.task-row:hover { border-color: var(--border-strong); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06); }
+
+/* --- Utility: flex with end alignment (tickets form) --- */
+.justify-end { justify-content: flex-end; }
+
+/* --- Ticket conversation: message bubbles --- */
+.msg {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.msg-merged {
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--amber);
+  color: var(--text-soft);
+}
+.who {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.stack .msg + .msg { margin-top: 8px; }

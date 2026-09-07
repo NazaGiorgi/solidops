@@ -1,0 +1,24 @@
+# =============================================================================
+# Backend Dockerfile.dev — LOCAL DEVELOPMENT
+# Installs deps, keeps source as a bind-mount (hot-reload via nest start --watch).
+# node_modules is a named volume in docker-compose.dev.yml so it survives restarts.
+# =============================================================================
+FROM node:20-alpine
+
+RUN apk add --no-cache tzdata
+ENV TZ=America/Argentina/Buenos_Aires
+
+WORKDIR /app
+
+# Build-time lock for reproducibility if a lockfile is present; otherwise npm i.
+COPY package.json ./
+COPY package-lock.json* ./
+RUN npm config set registry https://registry.npmjs.org && \
+    npm install --no-audit --no-fund
+
+# Copy remaining project files (the source is overridden by the compose bind-mount).
+COPY . .
+
+EXPOSE 4000
+
+CMD ["npm", "run", "start:dev"]
