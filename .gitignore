@@ -79,3 +79,6 @@ backend/tmp-verify.js
 backend/verify-lazy.js
 backend/verify-lazy-contact.js
 backend/diag-test.ts
+
+# Dump de PostgreSQL pegado por error con extensión .ts (157MB, no es código)
+backend/reparar-emails-historicos.ts
