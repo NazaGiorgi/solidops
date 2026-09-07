@@ -1,0 +1,165 @@
+# =============================================================================
+# docker-compose.dev.yml — LOCAL DEVELOPMENT (Windows + Docker Desktop/WSL2)
+#
+# Plain HTTP on localhost, no TLS, no Let's Encrypt. Hot-reload for backend
+# and frontend via bind-mounted source + named node_modules volume.
+#
+# Usage:  docker compose -f docker-compose.dev.yml up --build
+# =============================================================================
+
+name: ops-msp
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - msp_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ops-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - msp_net
+
+  minio:
+    image: minio/minio:latest
+    container_name: ops-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - msp_net
+
+  lo-converter:
+    build:
+      context: ./lo-converter
+      dockerfile: Dockerfile
+    container_name: ops-lo-converter
+    restart: unless-stopped
+    environment:
+      PORT: 8000
+    ports:
+      - "8001:8000"   # host:container (no exposición pública necesaria; útil para debug)
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - msp_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: ops-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      TZ: America/Argentina/Buenos_Aires
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      LO_CONVERTER_URL: http://lo-converter:8000
+      # [DIAG] Guardar el MIME RAW real descargado por IMAP en debug/imap-raw/*.eml.
+      # Poner a "1" SOLO para diagnosticar un email concreto; "0" la desactiva.
+      IMAP_DEBUG_RAW: "0"
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+    ports:
+      - "${BACKEND_PORT}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      lo-converter:
+        condition: service_healthy
+    command: ["npm", "run", "start:dev"]
+    networks:
+      - msp_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: ops-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_INTERNAL_API_URL: ${NEXT_PUBLIC_INTERNAL_API_URL}
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    depends_on:
+      - backend
+    command: ["npm", "run", "dev"]
+    networks:
+      - msp_net
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  backend_node_modules:
+  frontend_node_modules:
+
+networks:
+  msp_net:
+    driver: bridge

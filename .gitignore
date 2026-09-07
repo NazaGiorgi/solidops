@@ -54,6 +54,17 @@ backend/import/
 # Dumps de profiling (no versionar)
 *.cpuprofile
 
+# Documentos con credenciales reales / adjuntos de prueba (NO versionar)
+# USUARIOS DE DOMINIO.docx, INFRACESTRUCTURA DE USUARIO FINAL.docx y
+# GESTION DE BACKUPS.docx contienen contraseñas reales de producción.
+GESTION DE BACKUPS.docx
+USUARIOS DE DOMINIO.docx
+INFRACESTRUCTURA DE USUARIO FINAL.docx
+*.png
+*.jpg
+*.jpeg
+documento.pdf
+
 # Scripts/ad-hoc de diagnóstico del backend (no versionar: una sola vez)
 # co.js hardcodea credenciales dev de MinIO; el resto son pruebas puntuales.
 # verify-lazy*.js son utilidades para depurar hashes de Zammad (toman --secret
