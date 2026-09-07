@@ -82,3 +82,8 @@ backend/diag-test.ts
 
 # Dump de PostgreSQL pegado por error con extensión .ts (157MB, no es código)
 backend/reparar-emails-historicos.ts
+
+# Emails reales / datos de depuración (no versionar: correspondencia real)
+# backend/debug/imap-raw/*.eml contiene correos reales de clientes y propios.
+backend/debug/
+*.eml
