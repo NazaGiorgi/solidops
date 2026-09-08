@@ -102,6 +102,12 @@ export class BulkMoveTicketsDto {
   groupId: string;
 }
 
+export class BulkDeleteTicketsDto {
+  @IsArray()
+  @IsUUID(undefined, { each: true })
+  ticketIds: string[];
+}
+
 export class AddMessageDto {
   @IsOptional()
   @IsUUID()

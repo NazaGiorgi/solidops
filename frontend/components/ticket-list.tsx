@@ -60,9 +60,12 @@ export function TicketList({
             style={selectable ? { gridTemplateColumns: 'auto auto 88px 1fr auto auto 1.1fr 130px auto' } : undefined}
           >
             {selectable && (
-              <span className="ticket-cell ticket-cell-check" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle?.(t.id); }}>
-                <input type="checkbox" checked={selected} onChange={() => {}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); }} />
-              </span>
+              <label
+                className="ticket-cell ticket-cell-check"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input type="checkbox" checked={selected} onChange={() => onToggle?.(t.id)} />
+              </label>
             )}
             <span className="ticket-cell ticket-cell-status">
               <Pill style={STATUS_PILLS[t.status] || 'pill-gray'}>

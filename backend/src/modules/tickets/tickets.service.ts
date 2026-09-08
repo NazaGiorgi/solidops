@@ -587,6 +587,30 @@ export class TicketsService {
     return { moved, count: rows.length };
   }
 
+  // Borrado lógico masivo (spam / tickets de error). No elimina filas: solo setea
+  // `deleted_at = now()` (TypeORM) y persiste en auditoría. TypeORM excluye por
+  // defecto los tickets con `deleted_at` de listados, contadores, búsquedas y
+  // ficha (incluso portal), ya que la entity extiende SoftDeleteEntity.
+  async bulkSoftDelete(ticketIds: string[], actor: AuthenticatedUser): Promise<{ deleted: number; count: number }> {
+    if (!ticketIds.length) throw new BadRequestException('Seleccioná al menos un ticket');
+
+    const rows = await this.tickets.find({ where: { id: In(ticketIds) } });
+    if (!rows.length) return { deleted: 0, count: 0 };
+
+    const result = await this.tickets.softDelete({ id: In(rows.map((r) => r.id)) });
+    for (const ticket of rows) {
+      await this.audit.log({
+        user: actor,
+        action: AuditAction.DELETE,
+        entityType: AuditEntityType.TICKET,
+        entityId: ticket.id,
+        oldValue: { title: ticket.title, ticketNumber: ticket.ticketNumber },
+        meta: { softDelete: true, action: 'bulk_delete' },
+      });
+    }
+    return { deleted: result.affected ?? rows.length, count: rows.length };
+  }
+
   // Add a message; first agent-authored message resets first-response SLA.
   async addMessage(
     id: string,

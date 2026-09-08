@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -21,6 +22,7 @@ import {
   AddMessageDto,
   AssignTicketDto,
   BulkMoveTicketsDto,
+  BulkDeleteTicketsDto,
   ListTicketsQuery,
 } from './dto';
 import { Permissions } from '../../common/guards/permissions-key.decorator';
@@ -92,6 +94,14 @@ export class TicketsController {
   @Permissions(PERMISSIONS.TICKETS_UPDATE)
   bulkMove(@Body() dto: BulkMoveTicketsDto, @CurrentUser() user: AuthenticatedUser) {
     return this.service.bulkMove(dto.ticketIds, dto.groupId, user);
+  }
+
+  // Borrado lógico (soft delete) de tickets spam/error: solo marca `deleted_at`,
+  // mismo permiso que las demás acciones masivas del listado (bulk-move).
+  @Delete('bulk-delete')
+  @Permissions(PERMISSIONS.TICKETS_UPDATE)
+  bulkDelete(@Body() dto: BulkDeleteTicketsDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.service.bulkSoftDelete(dto.ticketIds, user);
   }
 
   @Patch(':id')

@@ -80,6 +80,7 @@ function TicketsContent({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveGroupId, setMoveGroupId] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -170,6 +171,7 @@ function TicketsContent({
     setSelectedIds(new Set());
     setMoveOpen(false);
     setMoveGroupId('');
+    setDeleteOpen(false);
   }
 
   async function bulkMove() {
@@ -184,6 +186,23 @@ function TicketsContent({
         .then((r: unknown) => r as { moved: number; count: number });
       const groupName = ticketGroups.find((g) => g.id === moveGroupId)?.name || 'box';
       setNotice(`Se movieron ${res.moved} tickets a "${groupName}"`);
+      setTimeout(() => setNotice(''), 2500);
+      clearSelection();
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function bulkDelete() {
+    setError('');
+    try {
+      const res = await api
+        .delete<{ deleted: number; count: number }>('/tickets/bulk-delete', {
+          ticketIds: Array.from(selectedIds),
+        })
+        .then((r: unknown) => r as { deleted: number; count: number });
+      setNotice(`Se eliminaron ${res.deleted} tickets`);
       setTimeout(() => setNotice(''), 2500);
       clearSelection();
       load();
@@ -207,26 +226,55 @@ function TicketsContent({
       {notice && <div className="notice" style={{ marginBottom: 10 }}>{notice}</div>}
       {error && <div style={{ marginBottom: 10 }}><ErrorNotice message={error} onDismiss={() => setError('')} autoHideMs={0} /></div>}
 
-      {selectedIds.size > 0 && (
-        <div className="flex wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 14, padding: '8px 12px', background: 'var(--bg-subtle)', borderRadius: 8, border: '1px solid var(--border-strong)' }}>
-          <span className="muted" style={{ fontSize: 13 }}>{selectedIds.size} seleccionados</span>
-          <button className="btn btn-sm" onClick={() => setMoveOpen((v) => !v)}>
-            Mover a…
-          </button>
-          {moveOpen && (
-            <>
-              <select className="select" style={{ maxWidth: 220 }} value={moveGroupId} onChange={(e) => setMoveGroupId(e.target.value)}>
-                <option value="">elegir box…</option>
-                {ticketGroups.filter((g) => g.name !== tray).map((g) => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
-              <button className="btn btn-primary btn-sm" onClick={bulkMove} disabled={!moveGroupId}>mover</button>
-            </>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={clearSelection}>cancelar selección</button>
-        </div>
-      )}
+      {/* Barra de acciones masivas con ALTURA SIEMPRE RESERVADA: aparece/desaparece
+          sin desplazar la lista (si se monta/desmonta, las filas se mueven bajo el
+          cursor y los clics caen en el elemento equivocado). */}
+      <div
+        className="flex wrap"
+        style={{
+          gap: 8,
+          alignItems: 'center',
+          marginBottom: 14,
+          padding: '8px 12px',
+          minHeight: 42,
+          background: selectedIds.size > 0 ? 'var(--bg-subtle)' : 'transparent',
+          borderRadius: 8,
+          border: selectedIds.size > 0 ? '1px solid var(--border-strong)' : '1px solid transparent',
+        }}
+      >
+        <span className="muted" style={{ fontSize: 13 }}>{selectedIds.size} seleccionados</span>
+        <button className="btn btn-sm" disabled={selectedIds.size === 0} onClick={() => setMoveOpen((v) => !v)}>
+          Mover a…
+        </button>
+        <button className="btn btn-danger btn-sm" disabled={selectedIds.size === 0} onClick={() => setDeleteOpen((v) => !v)}>
+          Eliminar
+        </button>
+        {deleteOpen && selectedIds.size > 0 && (
+          <>
+            <span className="muted" style={{ fontSize: 13 }}>
+              ¿Seguro que querés eliminar {selectedIds.size} tickets? Esta acción los oculta de todos los listados.
+            </span>
+            <button className="btn btn-primary btn-sm" onClick={bulkDelete}>
+              sí, eliminar
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setDeleteOpen(false)}>
+              cancelar
+            </button>
+          </>
+        )}
+        {moveOpen && selectedIds.size > 0 && (
+          <>
+            <select className="select" style={{ maxWidth: 220 }} value={moveGroupId} onChange={(e) => setMoveGroupId(e.target.value)}>
+              <option value="">elegir box…</option>
+              {ticketGroups.filter((g) => g.name !== tray).map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+            <button className="btn btn-primary btn-sm" onClick={bulkMove} disabled={!moveGroupId}>mover</button>
+          </>
+        )}
+        <button className="btn btn-ghost btn-sm" disabled={selectedIds.size === 0} onClick={clearSelection}>cancelar selección</button>
+      </div>
 
       <Card>
         <button

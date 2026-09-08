@@ -724,6 +724,16 @@ body {
 .ticket-cell-check {
   justify-content: center;
   cursor: pointer;
+  line-height: 0;
+  padding: 0;
+}
+.ticket-cell-check input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--blue);
+  cursor: pointer;
 }
 .ticket-cell {
   display: inline-flex;
