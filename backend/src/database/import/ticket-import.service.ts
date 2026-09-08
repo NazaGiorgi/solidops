@@ -151,7 +151,7 @@ export class TicketImportService {
     opts: ImportOptions,
   ): Promise<void> {
     // Idempotencia: si ya existe el legacy_zammad_id, skip.
-    const existing = await this.tickets.findOne({ where: { legacyZammadId: String(t.id) } });
+    const existing = await this.tickets.findOne({ where: { legacyZammadId: String(t.id) }, withDeleted: true });
     if (existing) {
       result.ticketsSkipped++;
       return;

@@ -85,6 +85,7 @@ export class ZammadImportService {
       // 2) Skip if the ticket was already imported (legacy_zammad_id present).
       const existing = await this.tickets.findOne({
         where: { legacyZammadId: String(t.id) },
+        withDeleted: true,
       });
       if (existing) {
         result.ticketsSkipped++;
