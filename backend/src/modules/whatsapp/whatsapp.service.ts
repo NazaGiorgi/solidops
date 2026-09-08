@@ -14,6 +14,7 @@ import { TicketsService } from '../tickets/tickets.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isWorkingTime, BusinessHours } from '../../common/utils/business-hours.util';
 import { TicketChannel, TicketStatus, TicketPriority, TicketAuthorType, NotificationType } from '../../common/enums';
+import { StorageService } from '../../storage/storage.service';
 
 // Menú de bienvenida del bot de WhatsApp.
 const MENU = `¡Hola! Sos bienvenido/a a Solido Connecting Solutions 👋
@@ -52,6 +53,24 @@ const TEMPLATE_LANG = 'es_AR';
 // Zona horaria para renderizar la hora del turno en el recordatorio de WhatsApp.
 const APPOINTMENT_TZ = 'America/Argentina/Buenos_Aires';
 
+// Versión de la Graph API de Meta (misma versión que el envío saliente v21.0).
+const GRAPH_API_VERSION = 'v21.0';
+
+// Límite de seguridad para medias de WhatsApp recibidas por el webhook. Meta limita
+// las imágenes a 5 MB, pero si llega un documento con mime de imagen se procesa igual:
+// este tope (25 MB) garantiza un error claro y no silencioso antes de subir a MinIO.
+const WHATSAPP_MEDIA_MAX_BYTES = 26214400;
+
+const WA_MEDIA_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+};
+
 // Opciones del menú → categoría interna, box y prioridad. La categoría es lo que
 // ve el staff (no expone terminología L1/L2/L3 ni boxes internos al cliente).
 const OPTIONS: Record<string, { category: string; legacyGroup: string | null; priority: TicketPriority; description?: string }> = {
@@ -84,6 +103,7 @@ export class WhatsappService {
     @InjectRepository(SystemSettings) private readonly settings: Repository<SystemSettings>,
     private readonly config: ConfigService,
     private readonly notifications: NotificationsService,
+    private readonly storage: StorageService,
     @Inject(forwardRef(() => TicketsService)) private readonly tickets: TicketsService,
   ) {}
 
@@ -170,17 +190,24 @@ export class WhatsappService {
       return;
     }
     const text = String(msg?.text?.body || '').trim();
-    if (!text) {
-      this.logger.warn(`[WA] Mensaje de ${from} sin texto (imagen/audio/documento no soportado aún), se ignora`);
+    const imageMedia = this.extractImageMedia(msg);
+    if (!text && !imageMedia) {
+      this.logger.warn(`[WA] Mensaje de ${from} con tipo no soportado (${msg?.type ?? 'sin tipo'}), se ignora`);
       return;
     }
 
-    this.logger.log(`[WA] Mensaje recibido de ${from}: ${text.slice(0, 80)}`);
+    this.logger.log(`[WA] Mensaje recibido de ${from}: tipo=${msg?.type ?? 'texto'}${text ? ` texto="${text.slice(0, 80)}"` : ''}`);
 
     const contact = await this.resolveContact(from, senderName);
 
     // Ticket de WhatsApp abierto para este contacto.
     const open = await this.findOpenWhatsappTicket(contact.id);
+
+    // Imagen recibida: se adjunta al ticket abierto (o se informa si no hay hilo).
+    if (imageMedia) {
+      await this.handleImageMessage(contact, open, imageMedia);
+      return;
+    }
 
     if (!open) {
       await this.handleChatbot(contact, from, text);
@@ -199,6 +226,113 @@ export class WhatsappService {
       this.logger.log(`[WA] Mensaje agregado al ticket abierto ${open.id} (${from})`);
       await this.notifyWhatsappMessage(res.ticket, contact.name);
     }
+  }
+
+  // --- Imágenes recibidas por WhatsApp ---------------------------------------
+  // Extrae la media de un mensaje de tipo `image` (el caso normal de fotos) o de
+  // un `document` cuyo mime sea `image/*` (fotos enviadas como archivo adjunto).
+  private extractImageMedia(msg: any): { id: string; mimeType: string; caption?: string } | null {
+    if (msg?.type === 'image' && msg?.image?.id) {
+      return {
+        id: String(msg.image.id),
+        mimeType: String(msg.image.mime_type || 'image/jpeg'),
+        caption: msg.image.caption,
+      };
+    }
+    if (
+      msg?.type === 'document' &&
+      msg?.document?.id &&
+      String(msg.document.mime_type || '').startsWith('image/')
+    ) {
+      return {
+        id: String(msg.document.id),
+        mimeType: String(msg.document.mime_type || 'image/jpeg'),
+        caption: msg.document.caption,
+      };
+    }
+    return null;
+  }
+
+  // Descarga la media desde la Graph API de Meta (URL temporal + token en el
+  // header), la sube a MinIO (igual que los adjuntos de email) y la adjunta al
+  // ticket abierto del contacto. El mensaje en la conversación lleva el caption
+  // de la imagen (si vino) o un texto genérico.
+  private async handleImageMessage(contact: Contact, open: Ticket | null, media: { id: string; mimeType: string; caption?: string }): Promise<void> {
+    if (!open) {
+      this.logger.warn(`[WA] Imagen de ${contact.whatsapp} sin ticket abierto; no hay hilo al cual adjuntarla`);
+      return;
+    }
+    if (!contact.customerId) {
+      this.logger.warn(`[WA] Contacto ${contact.id} sin empresa; imagen no asociada a ticket`);
+      return;
+    }
+    const body = String(media.caption || '').trim() || 'Imagen adjunta (WhatsApp)';
+    try {
+      const { buffer, filename, mimeType } = await this.downloadWhatsAppMedia(media.id);
+      if (buffer.length > WHATSAPP_MEDIA_MAX_BYTES) {
+        throw new Error(
+          `la imagen excede el límite de ${Math.round(WHATSAPP_MEDIA_MAX_BYTES / 1024 / 1024)} MB (${buffer.length} bytes)`,
+        );
+      }
+      const { url } = await this.storage.putObject(buffer, filename, mimeType, 'tickets');
+      const res = await this.tickets.upsertFromWhatsapp({
+        contactId: contact.id,
+        customerId: contact.customerId,
+        title: open.title,
+        messages: [
+          {
+            author: 'cliente',
+            body,
+            attachments: [{ filename, url, mimeType, sizeBytes: buffer.length }],
+          },
+        ],
+      });
+      this.logger.log(`[WA] Imagen ${filename} adjuntada al ticket ${res.ticket.id} (${buffer.length} bytes)`);
+      await this.notifyWhatsappMessage(res.ticket, contact.name);
+    } catch (e) {
+      this.logger.error(`[WA] Fallo adjuntando imagen del contacto ${contact.id} al ticket ${open.id}: ${(e as Error).message}`);
+      try {
+        await this.tickets.upsertFromWhatsapp({
+          contactId: contact.id,
+          customerId: contact.customerId,
+          title: open.title,
+          messages: [
+            {
+              author: 'bot',
+              body: `⚠ No se pudo guardar la imagen que envió el cliente por WhatsApp: ${(e as Error).message}`,
+            },
+          ],
+        });
+      } catch (e2) {
+        this.logger.error(`[WA] Fallo registrando aviso de imagen en ticket ${open.id}: ${(e2 as Error).message}`);
+      }
+    }
+  }
+
+  // 1) GET {media-id} de la Graph API → URL temporal de descarga (+mime).
+  // 2) GET esa URL con el access token en el header → bytes de la imagen.
+  private async downloadWhatsAppMedia(mediaId: string): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+    const token = this.config.get<string>('whatsapp.accessToken');
+    if (!token) throw new Error('WHATSAPP_ACCESS_TOKEN no configurado');
+
+    const infoRes = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!infoRes.ok) {
+      const body = (await infoRes.json().catch(() => null)) as { error?: { message?: string } } | null;
+      throw new Error(`Meta media info HTTP ${infoRes.status}: ${body?.error?.message || infoRes.statusText}`);
+    }
+    const info = (await infoRes.json()) as { url?: string; mime_type?: string };
+    if (!info.url) throw new Error('Meta no devolvió URL de descarga para la media');
+
+    const dlRes = await fetch(info.url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!dlRes.ok) throw new Error(`Descarga de media HTTP ${dlRes.status}`);
+
+    const buffer = Buffer.from(await dlRes.arrayBuffer());
+    const mimeType = info.mime_type || 'image/jpeg';
+    const ext = WA_MEDIA_EXT[mimeType] || 'img';
+    const filename = `whatsapp-${Date.now()}.${ext}`;
+    return { buffer, filename, mimeType };
   }
 
   // --- Chatbot (primer contacto, sin ticket abierto) -------------------------

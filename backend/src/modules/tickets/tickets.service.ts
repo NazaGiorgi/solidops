@@ -979,7 +979,11 @@ export class TicketsService {
     legacyGroup?: string | null;
     priority?: TicketPriority;
     description?: string | null;
-    messages: Array<{ author: 'cliente' | 'bot' | 'tecnico'; body: string }>;
+    messages: Array<{
+      author: 'cliente' | 'bot' | 'tecnico';
+      body: string;
+      attachments?: Array<{ filename: string; url: string; mimeType: string; sizeBytes?: number }>;
+    }>;
   }): Promise<{ ticket: Ticket; action: 'created' | 'appended' }> {
     const authorFor = (a: 'cliente' | 'bot' | 'tecnico') =>
       a === 'bot' ? TicketAuthorType.SISTEMA : a === 'tecnico' ? TicketAuthorType.TECNICO : TicketAuthorType.CLIENTE;
@@ -996,7 +1000,7 @@ export class TicketsService {
 
     if (open) {
       for (const m of data.messages) {
-        await this.messages.save(
+        const saved = await this.messages.save(
           this.messages.create({
             ticketId: open.id,
             authorType: authorFor(m.author),
@@ -1005,6 +1009,7 @@ export class TicketsService {
             fromEmail: null,
           }),
         );
+        await this.saveAttachments(saved.id, m.attachments);
       }
       return { ticket: open, action: 'appended' };
     }
@@ -1028,7 +1033,7 @@ export class TicketsService {
       }),
     );
     for (const m of data.messages) {
-      await this.messages.save(
+      const saved = await this.messages.save(
         this.messages.create({
           ticketId: ticket.id,
           authorType: authorFor(m.author),
@@ -1037,6 +1042,7 @@ export class TicketsService {
           fromEmail: null,
         }),
       );
+      await this.saveAttachments(saved.id, m.attachments);
     }
     const contract = await this.findActiveContract(data.customerId);
     await this.refreshSla(ticket, contract);
