@@ -300,6 +300,14 @@ export class PortalService {
 
     contact.portalPasswordHash = await bcrypt.hash(next, 10);
     contact.legacyArgon2Hash = null;
+    // Quien completó un reset demostró controlar la casilla: quedar verificado
+    // automáticamente (mismo criterio que el backfill de la migración, que marcó
+    // las cuentas de portal preexistentes con email_verified_at = now()).
+    if (!contact.emailVerifiedAt) {
+      contact.emailVerifiedAt = new Date();
+      contact.emailVerificationTokenHash = null;
+      contact.emailVerificationExpiresAt = null;
+    }
     const saved = await this.contacts.save(contact);
 
     await this.audit.log({

@@ -7,8 +7,8 @@ import { BrandLogo } from '../../components/brand-logo';
 export default function LoginPage() {
   const { login } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState('maria@msp.local');
-  const [password, setPassword] = useState('demo1234');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -61,13 +61,6 @@ export default function LoginPage() {
           <a href="/forgot-password" className="link">
             ¿Olvidaste tu contraseña?
           </a>
-        </div>
-        <div className="login-hint">
-          Demo: <code>maria@msp.local</code> / <code>demo1234</code> (técnica).
-          <br />
-          Supervisor: <code>ana@msp.local</code> / <code>demo1234</code>.
-          <br />
-          Coordinador: <code>lucas@msp.local</code> / <code>demo1234</code>.
         </div>
       </div>
     </div>
