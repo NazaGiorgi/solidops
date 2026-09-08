@@ -53,12 +53,18 @@ export class PortalService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async login(email: string, password: string) {
+  async login(email: string, password: string, ip = '127.0.0.1') {
+    const normalized = (email || '').toLowerCase().trim();
+    // Anti fuerza-bruta: máx. 10 intentos por IP y 5 por IP+email en 15 min.
+    // Keys con prefijo `portal-` para que sean independientes del login staff.
+    await this.rateLimit.check(`portal-login:${ip}`, 10, 900);
+    await this.rateLimit.check(`portal-login:${ip}:${normalized}`, 5, 900);
+
     const contact = await this.contacts
       .createQueryBuilder('c')
       .addSelect('c.portalPasswordHash')
       .addSelect('c.legacyArgon2Hash')
-      .where('c.email = :email', { email: email.toLowerCase().trim() })
+      .where('c.email = :email', { email: normalized })
       .andWhere('c.portal_enabled = true')
       .getOne();
     if (!contact) {
@@ -77,6 +83,9 @@ export class PortalService {
       },
     });
     if (!ok) throw new UnauthorizedException('Credenciales de portal inválidas');
+    // Éxito (contraseña correcta): limpiar contadores para no penalizar al usuario legítimo.
+    await this.rateLimit.reset(`portal-login:${ip}`);
+    await this.rateLimit.reset(`portal-login:${ip}:${normalized}`);
     // Cuenta nueva del portal: no puede loguearse hasta verificar el email.
     if (!contact.emailVerifiedAt) {
       throw new UnauthorizedException('Verificá tu correo para activar tu cuenta');

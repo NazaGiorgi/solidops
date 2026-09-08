@@ -39,7 +39,7 @@ export class RateLimitService {
       try {
         const count = await this.redis.incr(key);
         if (count === 1) await this.redis.expire(key, windowSec);
-        if (count > limit) throw new HttpException('Demasiadas solicitudes, intentá más tarde', HttpStatus.TOO_MANY_REQUESTS);
+        if (count > limit) throw new HttpException('Demasiados intentos, esperá unos minutos e intentá de nuevo', HttpStatus.TOO_MANY_REQUESTS);
         return;
       } catch (e) {
         if (e instanceof HttpException && e.getStatus() === HttpStatus.TOO_MANY_REQUESTS) throw e;
@@ -55,7 +55,7 @@ export class RateLimitService {
       this.memory.set(key, entry);
     }
     entry.count++;
-    if (entry.count > limit) throw new HttpException('Demasiadas solicitudes, intentá más tarde', HttpStatus.TOO_MANY_REQUESTS);
+    if (entry.count > limit) throw new HttpException('Demasiados intentos, esperá unos minutos e intentá de nuevo', HttpStatus.TOO_MANY_REQUESTS);
   }
 
   // Clear a key after a successful reset (so the same IP/account can request again).

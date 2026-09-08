@@ -12,6 +12,10 @@ async function bootstrap() {
   const config = app.get(ConfigService);
 
   app.setGlobalPrefix('api');
+  // Confiar en el primer proxy (Caddy en prod, el default en dev) para que
+  // `req.ip` sea la IP real del cliente y los rate-limits por IP funcionen
+  // detrás de un reverse proxy.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
   app.enableCors({
     origin: config.get<string[]>('corsOrigins'),
     credentials: true,

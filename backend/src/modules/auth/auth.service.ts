@@ -73,8 +73,17 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string, purpose?: string) {
+  async login(email: string, password: string, purpose?: string, ip = '127.0.0.1') {
+    const normalized = (email || '').toLowerCase().trim();
+    // Anti fuerza-bruta: máx. 10 intentos por IP y 5 por IP+email en 15 min.
+    // Keys distintas a las de forgot-password para no mezclar contadores.
+    await this.rateLimit.check(`login:${ip}`, 10, 900);
+    await this.rateLimit.check(`login:${ip}:${normalized}`, 5, 900);
+
     const user = await this.validateUser(email, password);
+    // Éxito: limpiar contadores para que logins legítimos no acumulen.
+    await this.rateLimit.reset(`login:${ip}`);
+    await this.rateLimit.reset(`login:${ip}:${normalized}`);
     const context = this.toUserContext(user);
     const payload: JwtPayload = {
       sub: user.id,

@@ -79,8 +79,8 @@ export class PortalController {
 
   @Public()
   @Post('auth/login')
-  login(@Body() dto: PortalLoginDto) {
-    return this.service.login(dto.email, dto.password);
+  login(@Req() req: Request, @Body() dto: PortalLoginDto) {
+    return this.service.login(dto.email, dto.password, req.ip || '127.0.0.1');
   }
 
   @Public()

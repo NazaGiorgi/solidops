@@ -56,8 +56,8 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  async login(@Body() dto: LoginDto) {
-    return this.auth.login(dto.email, dto.password, dto.purpose);
+  async login(@Req() req: Request, @Body() dto: LoginDto) {
+    return this.auth.login(dto.email, dto.password, dto.purpose, req.ip || '127.0.0.1');
   }
 
   @Public()
