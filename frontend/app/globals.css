@@ -53,8 +53,10 @@
    MODE OSCURO: activado con <html data-theme="dark">.
    La paleta semantica saturada (--green/--amber/--red/--blue/--gray) se
    mantiene igual: sobre fondos oscuros sigue teniendo buen contraste.
+   El portal de clientes es SIEMPRE claro: el selector excluye <html data-portal>,
+   que /portal/* fuerza en app/portal/layout.tsx y en el script de app/layout.tsx.
    ========================================================================== */
-[data-theme='dark'] {
+[data-theme='dark']:not([data-portal]) {
   /* Neutral palette (dark) */
   --bg: #0d1117;
   --bg-subtle: #10161e;
@@ -404,8 +406,8 @@ body {
 
 /* Logo (PNG/SVG con gris oscuro + magenta): en modo oscuro el gris desaparecería.
    Invertir + hue-rotate mantiene el gris claro y el magenta legible sobre fondo oscuro. */
-[data-theme='dark'] .sidebar-brand img,
-[data-theme='dark'] .login-card img {
+[data-theme='dark']:not([data-portal]) .sidebar-brand img,
+[data-theme='dark']:not([data-portal]) .login-card img {
   filter: invert(0.92) hue-rotate(180deg);
 }
 .link { color: var(--blue); text-decoration: none; }

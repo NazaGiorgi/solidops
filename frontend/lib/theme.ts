@@ -22,7 +22,9 @@ export function resolveTheme(): Theme {
 
 export function applyTheme(t: Theme) {
   if (typeof document === 'undefined') return;
-  document.documentElement.setAttribute('data-theme', t);
+  const el = document.documentElement;
+  el.setAttribute('data-theme', t);
+  el.removeAttribute('data-portal');
 }
 
 export function useTheme() {

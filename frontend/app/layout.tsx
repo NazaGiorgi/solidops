@@ -15,7 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var k='solidops_theme';var v=localStorage.getItem(k);var t=(v==='dark'||v==='light')?v:(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();`,
+            __html: `(function(){try{var k='solidops_theme';var el=document.documentElement;var isPortal=location.pathname.indexOf('/portal')===0;if(isPortal){el.setAttribute('data-theme','light');el.setAttribute('data-portal','');return;}el.removeAttribute('data-portal');var v=localStorage.getItem(k);var t=(v==='dark'||v==='light')?v:(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');el.setAttribute('data-theme',t);}catch(e){}})();`,
           }}
         />
       </head>

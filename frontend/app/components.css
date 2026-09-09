@@ -84,7 +84,7 @@
   border-radius: 4px;
 }
 .notice-close:hover { background: rgba(0, 0, 0, 0.06); }
-[data-theme='dark'] .notice-close:hover { background: rgba(255, 255, 255, 0.08); }
+[data-theme='dark']:not([data-portal]) .notice-close:hover { background: rgba(255, 255, 255, 0.08); }
 
 /* --- Toast stack (top-right) --- */
 .toast-viewport {
