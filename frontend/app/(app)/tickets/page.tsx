@@ -81,6 +81,9 @@ function TicketsContent({
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveGroupId, setMoveGroupId] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState('');
+  const [confirmStatus, setConfirmStatus] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -172,6 +175,9 @@ function TicketsContent({
     setMoveOpen(false);
     setMoveGroupId('');
     setDeleteOpen(false);
+    setStatusOpen(false);
+    setBulkStatus('');
+    setConfirmStatus(null);
   }
 
   async function bulkMove() {
@@ -203,6 +209,26 @@ function TicketsContent({
         })
         .then((r: unknown) => r as { deleted: number; count: number });
       setNotice(`Se eliminaron ${res.deleted} tickets`);
+      setTimeout(() => setNotice(''), 2500);
+      clearSelection();
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function bulkChangeStatus() {
+    const status = confirmStatus;
+    if (!status) return;
+    setError('');
+    try {
+      const res = await api
+        .patch<{ changed: number; count: number }>('/tickets/bulk-status', {
+          ticketIds: Array.from(selectedIds),
+          status,
+        })
+        .then((r: unknown) => r as { changed: number; count: number });
+      setNotice(`Se cambiaron ${res.changed} tickets a "${STATUS_LABELS[status] || status}"`);
       setTimeout(() => setNotice(''), 2500);
       clearSelection();
       load();
@@ -246,6 +272,9 @@ function TicketsContent({
         <button className="btn btn-sm" disabled={selectedIds.size === 0} onClick={() => setMoveOpen((v) => !v)}>
           Mover a…
         </button>
+        <button className="btn btn-sm" disabled={selectedIds.size === 0} onClick={() => setStatusOpen((v) => !v)}>
+          Cambiar estado a…
+        </button>
         <button className="btn btn-danger btn-sm" disabled={selectedIds.size === 0} onClick={() => setDeleteOpen((v) => !v)}>
           Eliminar
         </button>
@@ -271,6 +300,33 @@ function TicketsContent({
               ))}
             </select>
             <button className="btn btn-primary btn-sm" onClick={bulkMove} disabled={!moveGroupId}>mover</button>
+          </>
+        )}
+        {statusOpen && selectedIds.size > 0 && (
+          <>
+            <select className="select" style={{ maxWidth: 180 }} value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
+              <option value="">elegir estado…</option>
+              {Object.keys(STATUS_LABELS).map((k) => (
+                <option key={k} value={k}>{STATUS_LABELS[k]}</option>
+              ))}
+            </select>
+            <button className="btn btn-primary btn-sm" disabled={!bulkStatus} onClick={() => setConfirmStatus(bulkStatus)}>
+              aplicar
+            </button>
+          </>
+        )}
+        {confirmStatus && selectedIds.size > 0 && (
+          <>
+            <span className="muted" style={{ fontSize: 13 }}>
+              ¿Confirmás cambiar {selectedIds.size} ticket{selectedIds.size > 1 ? 's' : ''} a "{STATUS_LABELS[confirmStatus] || confirmStatus}"?
+              {confirmStatus === 'cerrado' && ' Los tickets cerrados se ocultan de la ronda de trabajo (podés reabrirlos manualmente).'}
+            </span>
+            <button className="btn btn-primary btn-sm" onClick={bulkChangeStatus}>
+              sí, aplicar
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setConfirmStatus(null)}>
+              cancelar
+            </button>
           </>
         )}
         <button className="btn btn-ghost btn-sm" disabled={selectedIds.size === 0} onClick={clearSelection}>cancelar selección</button>

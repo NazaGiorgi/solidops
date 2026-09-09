@@ -23,6 +23,7 @@ import {
   AssignTicketDto,
   BulkMoveTicketsDto,
   BulkDeleteTicketsDto,
+  BulkChangeStatusTicketsDto,
   ListTicketsQuery,
 } from './dto';
 import { Permissions } from '../../common/guards/permissions-key.decorator';
@@ -102,6 +103,12 @@ export class TicketsController {
   @Permissions(PERMISSIONS.TICKETS_UPDATE)
   bulkDelete(@Body() dto: BulkDeleteTicketsDto, @CurrentUser() user: AuthenticatedUser) {
     return this.service.bulkSoftDelete(dto.ticketIds, user);
+  }
+
+  @Patch('bulk-status')
+  @Permissions(PERMISSIONS.TICKETS_UPDATE)
+  bulkChangeStatus(@Body() dto: BulkChangeStatusTicketsDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.service.bulkChangeStatus(dto.ticketIds, dto.status, user);
   }
 
   @Patch(':id')

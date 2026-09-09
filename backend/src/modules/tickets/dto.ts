@@ -108,6 +108,15 @@ export class BulkDeleteTicketsDto {
   ticketIds: string[];
 }
 
+export class BulkChangeStatusTicketsDto {
+  @IsArray()
+  @IsUUID(undefined, { each: true })
+  ticketIds: string[];
+
+  @IsEnum(TicketStatus)
+  status: TicketStatus;
+}
+
 export class AddMessageDto {
   @IsOptional()
   @IsUUID()

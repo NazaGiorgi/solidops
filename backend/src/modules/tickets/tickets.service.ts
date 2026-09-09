@@ -611,6 +611,51 @@ export class TicketsService {
     return { deleted: result.affected ?? rows.length, count: rows.length };
   }
 
+  // Cambio de estado masivo (incluye cierre de tickets). Idempotente: los
+  // tickets que ya están en el estado destino no generan cambio, no fallan y
+  // no se auditan. Replica la misma lógica de resolvedAt que el update
+  // individual. Auditoría individual por ticket (audit_logs). A diferencia del
+  // update individual, NO envía auto-emails al cliente para no generar spam al
+  // cerrar/resolver en lote.
+  async bulkChangeStatus(
+    ticketIds: string[],
+    status: TicketStatus,
+    actor: AuthenticatedUser,
+  ): Promise<{ changed: number; count: number }> {
+    if (!ticketIds.length) throw new BadRequestException('Seleccioná al menos un ticket');
+    if (!Object.values(TicketStatus).includes(status)) {
+      throw new BadRequestException('Estado inválido');
+    }
+
+    const rows = await this.tickets.find({ where: { id: In(ticketIds) } });
+    if (!rows.length) return { changed: 0, count: 0 };
+
+    let changed = 0;
+    for (const ticket of rows) {
+      if (ticket.status === status) continue;
+      const oldStatus = ticket.status;
+      ticket.status = status;
+      if (status === TicketStatus.RESUELTO || status === TicketStatus.CERRADO) {
+        ticket.resolvedAt = ticket.resolvedAt ?? new Date();
+        if (status === TicketStatus.CERRADO) ticket.resolvedAt = new Date();
+      } else {
+        ticket.resolvedAt = null;
+      }
+      await this.tickets.save(ticket);
+      await this.audit.log({
+        user: actor,
+        action: AuditAction.STATUS_CHANGE,
+        entityType: AuditEntityType.TICKET,
+        entityId: ticket.id,
+        oldValue: { status: oldStatus },
+        newValue: { status },
+        meta: { bulk: true, action: 'bulk_status_change' },
+      });
+      changed++;
+    }
+    return { changed, count: rows.length };
+  }
+
   // Add a message; first agent-authored message resets first-response SLA.
   async addMessage(
     id: string,
