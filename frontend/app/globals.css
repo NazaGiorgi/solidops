@@ -693,7 +693,7 @@ body {
 /* Fila de ticket: es un <Link> que ABRE el ticket (no acordeÃ³n inline). */
 .ticket-row-link {
   display: grid;
-  grid-template-columns: auto 88px 1fr auto auto 1.1fr 130px auto;
+  grid-template-columns: auto 88px minmax(min(var(--ticket-title-w, 0px), 44vw), 1fr) auto auto 1.1fr 130px auto;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -752,11 +752,52 @@ body {
   color: var(--text-muted);
 }
 .ticket-cell-title {
+  position: relative;
+  overflow: visible;
   font-weight: 600;
   font-size: 14px;
   white-space: nowrap;
+}
+.ticket-cell-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;}
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticket-resize-handle {
+  position: absolute;
+  top: 50%;
+  right: -9px;
+  width: 8px;
+  height: 26px;
+  transform: translateY(-50%);
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 20;
+  color: var(--text-faint);
+}
+.ticket-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+}
+.ticket-resize-handle:hover,
+.ticket-resize-handle:active {
+  color: var(--blue);
+}
+.ticket-resize-handle:hover::before,
+.ticket-resize-handle:active::before {
+  opacity: 1;
+}
 .ticket-cell-source {
   font-size: 13px;
   margin-right: 6px;
@@ -805,6 +846,9 @@ body {
   }
   .ticket-cell-title {
     grid-column: 3 / -1;
+  }
+  .ticket-resize-handle {
+    display: none;
   }
   .ticket-cell-cust {
     grid-column: 1 / -1;
