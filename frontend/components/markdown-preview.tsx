@@ -1,12 +1,12 @@
 'use client';
 import { ReactNode } from 'react';
 
-// Renderizador de Markdown MUY simple y SEGURO: convierte patrones básicos de
+// Renderizador de Markdown MUY simple y SEGURO: convierte patrones bÃ¡sicos de
 // Markdown a elementos React nativos. No usa dangerouslySetInnerHTML ni
-// innerHTML (evita XSS por contenido), y tampoco depende de una librería externa
+// innerHTML (evita XSS por contenido), y tampoco depende de una librerÃ­a externa
 // (npm no es fiable en este entorno). Soporta: encabezados, negrita, cursiva,
-// código inline, bloques de código, listas (con viñetas), enlaces y saltos de
-// línea. Suficiente para notas técnicas de los técnicos.
+// cÃ³digo inline, bloques de cÃ³digo, listas (con viÃ±etas), enlaces y saltos de
+// lÃ­nea. Suficiente para notas tÃ©cnicas de los tÃ©cnicos.
 export function MarkdownPreview({ text }: { text: string }) {
   if (!text) return <p className="muted">(sin contenido)</p>;
   const lines = text.split('\n');
@@ -31,7 +31,7 @@ export function MarkdownPreview({ text }: { text: string }) {
 
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '');
-    // Bloque de código ```
+    // Bloque de cÃ³digo ```
     if (line.trim().startsWith('```')) {
       if (!inCode) {
         flushList();
@@ -39,7 +39,7 @@ export function MarkdownPreview({ text }: { text: string }) {
         codeLines = [];
       } else {
         nodes.push(
-          <pre key={key++} style={{ background: '#f4f4f5', padding: 10, borderRadius: 6, overflowX: 'auto', fontSize: 13 }}>
+          <pre key={key++} style={{ background: 'var(--code-bg)', padding: 10, borderRadius: 6, overflowX: 'auto', fontSize: 13 }}>
             <code>{codeLines.join('\n')}</code>
           </pre>,
         );
@@ -48,7 +48,7 @@ export function MarkdownPreview({ text }: { text: string }) {
       continue;
     }
     if (inCode) { codeLines.push(line); continue; }
-    // Demás encabezados
+    // DemÃ¡s encabezados
     const h = line.match(/^(#{1,4})\s+(.*)$/);
     if (h) {
       flushList();
@@ -57,7 +57,7 @@ export function MarkdownPreview({ text }: { text: string }) {
       nodes.push(<div key={key++} style={style}>{renderInline(h[2])}</div>);
       continue;
     }
-    // Lista (viñeta)
+    // Lista (viÃ±eta)
     const li = line.match(/^\s*[-*]\s+(.*)$/);
     if (li) { list.push(li[1]); continue; }
     // Enlace [texto](url) o URL a secas
@@ -69,7 +69,7 @@ export function MarkdownPreview({ text }: { text: string }) {
 }
 
 function renderInline(text: string): ReactNode {
-  // Procesa: código `x`, negrita **x**, cursiva *x*, enlace [t](u)
+  // Procesa: cÃ³digo `x`, negrita **x**, cursiva *x*, enlace [t](u)
   const parts: ReactNode[] = [];
   const re = /(`[^`]+`|\*\*[^*]+\*\*|(?<!\*)\*[^*]+\*(?!\*)|\[[^\]]+\]\([^)]+\))/g;
   let last = 0;
@@ -79,7 +79,7 @@ function renderInline(text: string): ReactNode {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const tok = m[0];
     if (tok.startsWith('`')) {
-      parts.push(<code key={k++} style={{ background: '#f4f4f5', padding: '1px 4px', borderRadius: 4, fontSize: 13 }}>{tok.slice(1, -1)}</code>);
+      parts.push(<code key={k++} style={{ background: 'var(--code-bg)', padding: '1px 4px', borderRadius: 4, fontSize: 13 }}>{tok.slice(1, -1)}</code>);
     } else if (tok.startsWith('**')) {
       parts.push(<strong key={k++}>{tok.slice(2, -2)}</strong>);
     } else if (tok.startsWith('*')) {
@@ -87,7 +87,7 @@ function renderInline(text: string): ReactNode {
     } else {
       const link = tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (link) {
-        parts.push(<a key={k++} href={link[2]} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{link[1]}</a>);
+        parts.push(<a key={k++} href={link[2]} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{link[1]}</a>);
       } else parts.push(tok);
     }
     last = re.lastIndex;

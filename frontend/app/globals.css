@@ -33,6 +33,74 @@
   --radius: 8px;
   --radius-sm: 6px;
   --radius-pill: 999px;
+
+  /* Tema: colores derivados que antes estaban hardcodeados */
+  --bg-hover: #edeff2;
+  --on-accent: #ffffff;
+  --blue-hover: #1d4ed8;
+  --mine-bg: #e8f2fc;
+  --mine-border: #cfe3f7;
+  --mine-hover: #dcecfa;
+  --chip-bg: #ffffff;
+  --chip-text: #334155;
+  --chip-border: #d7dde6;
+  --red-text: #b91c1c;
+  --amber-text: #92400e;
+  --code-bg: #f4f4f5;
+}
+
+/* ==========================================================================
+   MODE OSCURO: activado con <html data-theme="dark">.
+   La paleta semantica saturada (--green/--amber/--red/--blue/--gray) se
+   mantiene igual: sobre fondos oscuros sigue teniendo buen contraste.
+   ========================================================================== */
+[data-theme='dark'] {
+  /* Neutral palette (dark) */
+  --bg: #0d1117;
+  --bg-subtle: #10161e;
+  --surface: #161d27;
+  --border: #2b3440;
+  --border-strong: #3b4654;
+  --text: #e6edf3;
+  --text-soft: #c9d4df;
+  --text-muted: #9aa8b8;
+  --text-faint: #6d7887;
+
+  /* Semantic softs/borders (dark) — los textos semanticos saturados quedan claros sobre estos */
+  --green-suave: #0e2f1d;
+  --green-border: #1f5a38;
+  --amber-suave: #33260a;
+  --amber-border: #6b4d12;
+  --red-suave: #38121a;
+  --red-border: #7c2633;
+  --blue-suave: #10294f;
+  --blue-border: #2a4f8f;
+  --gray-suave: #1d2530;
+  --gray-border: #333d4a;
+
+  /* Derivados para deshue de lo que estaba hardcodeado */
+  --bg-hover: #1f2833;
+  --blue-hover: #3b82f6;
+  --mine-bg: #10202f;
+  --mine-border: #24415c;
+  --mine-hover: #0d1b28;
+  --chip-bg: #161d27;
+  --chip-text: #d7e0ea;
+  --chip-border: #333d4a;
+  --red-text: #f3787f;
+  --amber-text: #f2c14e;
+  --code-bg: #1a2129;
+
+  /* Portal del cliente (dark) */
+  --portal-bg: #0d1117;
+  --portal-text: #e6edf3;
+  --portal-accent: #3d6bff;
+  --portal-accent-strong: #2c56e0;
+  --portal-accent-soft: #16224a;
+  --portal-header-bg: #0a0e14;
+  --portal-header-sub: #8fa0b4;
+  --portal-card-bg: #161d27;
+  --portal-card-border: #2b3440;
 }
 
 * {
@@ -138,8 +206,8 @@ body {
    paler than --blue-suave (#dbeafe) so it never competes with the semantic
    badge colors (green=ok/resuelto, amber=riesgo/pospuesto, blue=nuevo/abierto). */
 .card-mine {
-  background: #e8f2fc;
-  border-color: #cfe3f7;
+  background: var(--mine-bg);
+  border-color: var(--mine-border);
 }
 .card + .card {
   margin-top: 12px;
@@ -161,21 +229,21 @@ body {
 
 /* Filter chips (reports range selector) */
 .chip {
-  border: 1px solid #d7dde6;
-  background: #fff;
-  color: #334155;
+  border: 1px solid var(--chip-border);
+  background: var(--chip-bg);
+  color: var(--chip-text);
   border-radius: 999px;
   padding: 4px 12px;
   font-size: 13px;
   cursor: pointer;
 }
 .chip:hover {
-  border-color: #2563eb;
+  border-color: var(--blue);
 }
 .chip-active {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #fff;
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--on-accent);
 }
 .field-label {
   font-size: 13px;
@@ -228,7 +296,7 @@ body {
   white-space: nowrap;
 }
 .pill-green { background: var(--green-suave); color: var(--green); border-color: var(--green-border); }
-.pill-amber { background: var(--amber-suave); color: #92400e; border-color: var(--amber-border); }
+.pill-amber { background: var(--amber-suave); color: var(--amber-text); border-color: var(--amber-border); }
 .pill-red { background: var(--red-suave); color: var(--red); border-color: var(--red-border); }
 .pill-blue { background: var(--blue-suave); color: var(--blue); border-color: var(--blue-border); }
 .pill-gray { background: var(--gray-suave); color: var(--text-soft); border-color: var(--gray-border); }
@@ -253,8 +321,8 @@ body {
   transition: background 0.12s;
 }
 .btn:hover { background: var(--bg-subtle); }
-.btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-.btn-primary:hover { background: #1d4ed8; }
+.btn-primary { background: var(--blue); border-color: var(--blue); color: var(--on-accent); }
+.btn-primary:hover { background: var(--blue-hover); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-soft); }
 .btn-danger { color: var(--red); border-color: var(--red-border); background: var(--red-suave); }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
@@ -333,7 +401,14 @@ body {
 .login-card { width: 100%; max-width: 380px; }
 .login-title { text-align: center; font-size: 20px; font-weight: 700; }
 .login-sub { text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 24px; }
-.link { color: #2563eb; text-decoration: none; }
+
+/* Logo (PNG/SVG con gris oscuro + magenta): en modo oscuro el gris desaparecería.
+   Invertir + hue-rotate mantiene el gris claro y el magenta legible sobre fondo oscuro. */
+[data-theme='dark'] .sidebar-brand img,
+[data-theme='dark'] .login-card img {
+  filter: invert(0.92) hue-rotate(180deg);
+}
+.link { color: var(--blue); text-decoration: none; }
 .link:hover { text-decoration: underline; }
 
 .login-hint {
@@ -354,6 +429,7 @@ body {
   --portal-bg: #f5f7fa;
   --portal-text: #1b2430;
   --portal-accent: #2657ff;
+  --portal-accent-strong: #1c46d8;
   --portal-accent-soft: #e8eeff;
   --portal-header-bg: #1b2430;      /* dark header */
   --portal-header-sub: #aeb6c2;     /* muted subtitle on dark */
@@ -442,8 +518,8 @@ body {
   font-weight: 600;
   font-family: var(--font-space), sans-serif;
   border-radius: 999px;
-  border: 0.5px solid #d4dae3;
-  background: #ffffff;
+  border: 0.5px solid var(--portal-card-border);
+  background: var(--portal-card-bg);
   color: var(--portal-text);
   cursor: pointer;
   transition: all 0.12s;
@@ -452,7 +528,7 @@ body {
 .portal-pill.active {
   background: var(--portal-accent);
   border-color: var(--portal-accent);
-  color: #ffffff;
+  color: #fff;
 }
 .portal-new-btn {
   display: inline-flex;
@@ -469,7 +545,7 @@ body {
   cursor: pointer;
   transition: background 0.12s;
 }
-.portal-new-btn:hover { background: #1c46d8; }
+.portal-new-btn:hover { background: var(--portal-accent-strong); }
 
 /* --- Ticket grid (2 cols desktop, 1 mobile) --- */
 .portal-grid {
@@ -504,7 +580,7 @@ body {
   top: 0; left: 0; right: 0;
   height: 3px;
   border-radius: 12px 12px 0 0;
-  background: #d4dae3;
+  background: var(--portal-card-border);
 }
 .portal-card-title {
   font-family: var(--font-space), sans-serif;
@@ -519,7 +595,7 @@ body {
   justify-content: space-between;
   gap: 10px;
 }
-.portal-card-time { font-size: 12px; color: #9aa3b1; white-space: nowrap; }
+.portal-card-time { font-size: 12px; color: var(--portal-header-sub); white-space: nowrap; }
 
 /* Detail layout wrapper (now provided by the shared PortalShell) */
 .portal-main {
@@ -712,10 +788,10 @@ body {
   border-color: var(--border-strong);
 }
 .ticket-row-mine {
-  background: #e8f2fc;
+  background: var(--mine-bg);
 }
 .ticket-row-mine:hover {
-  background: #dcecfa;
+  background: var(--mine-hover);
 }
 .ticket-row-selected {
   background: var(--blue-suave);
@@ -936,7 +1012,7 @@ body {
   justify-content: center;
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--blue);
   flex-shrink: 0;
   user-select: none;

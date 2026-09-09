@@ -129,7 +129,7 @@ export default function NotasPage() {
                 >
                   <button
                     className="link"
-                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: selectedTags.includes(t.name) ? 'white' : 'inherit' }}
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: selectedTags.includes(t.name) ? 'var(--on-accent)' : 'inherit' }}
                     onClick={() => toggleTag(t.name)}
                   >
                     {t.name} · {t.noteCount}
@@ -187,13 +187,13 @@ export default function NotasPage() {
                     {n.box?.name && <span>📁 {n.box.name} · </span>}
                     {n.customer && (
                       <span>
-                        <Link href={`/clientes/${n.customer.id}`} style={{ color: '#2563eb' }}>👤 {n.customer.name}</Link>
+                        <Link href={`/clientes/${n.customer.id}`} style={{ color: 'var(--blue)' }}>👤 {n.customer.name}</Link>
                       </span>
                     )}
                     {n.ticket && (
                       <span>
                         {' · '}
-                        <Link href={`/tickets/${n.ticket.id}`} style={{ color: '#2563eb' }}>🎫 {n.ticket.title.slice(0, 40)}</Link>
+                        <Link href={`/tickets/${n.ticket.id}`} style={{ color: 'var(--blue)' }}>🎫 {n.ticket.title.slice(0, 40)}</Link>
                       </span>
                     )}
                   </div>
@@ -395,7 +395,7 @@ function CustomerAutocomplete({ q, onPick }: { q: string; onPick: (c: CustomerLi
     api.get<CustomerLite[]>(`/customers?search=${encodeURIComponent(q)}`).then(setRows).catch(() => setRows([]));
   }, [q]);
   return (
-    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--border)', borderRadius: 6, zIndex: 20, maxHeight: 200, overflow: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
+    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, zIndex: 20, maxHeight: 200, overflow: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
       {rows.length === 0 ? (
         <div className="card-meta" style={{ padding: 8 }}>sin coincidencias</div>
       ) : (
@@ -417,7 +417,7 @@ function TicketAutocomplete({ q, onPick }: { q: string; onPick: (t: TicketLite) 
     }).catch(() => setRows([]));
   }, [q]);
   return (
-    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--border)', borderRadius: 6, zIndex: 20, maxHeight: 200, overflow: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
+    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, zIndex: 20, maxHeight: 200, overflow: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
       {rows.length === 0 ? (
         <div className="card-meta" style={{ padding: 8 }}>sin coincidencias</div>
       ) : (

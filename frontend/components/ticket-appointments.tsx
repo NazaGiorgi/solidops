@@ -184,7 +184,7 @@ function AppointmentForm({ ticketId, onClose, onSaved }: { ticketId: string; onC
                   <div
                     style={{
                       position: 'absolute', left: 0, right: 0, top: 'calc(100% + 2px)',
-                      background: 'var(--bg, #fff)', border: '1px solid var(--border)',
+                      background: 'var(--surface)', border: '1px solid var(--border)',
                       borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,.08)', zIndex: 20,
                       maxHeight: 220, overflow: 'auto',
                     }}
@@ -206,7 +206,7 @@ function AppointmentForm({ ticketId, onClose, onSaved }: { ticketId: string; onC
                         key={o.id}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-                          cursor: 'pointer', background: selected.includes(o.id) ? 'var(--bg-hover, #f2f2f3)' : 'none',
+                          cursor: 'pointer', background: selected.includes(o.id) ? 'var(--bg-hover)' : 'none',
                         }}
                       >
                         <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} />

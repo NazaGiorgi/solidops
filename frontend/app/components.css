@@ -58,12 +58,12 @@
 }
 .notice-error {
   background: var(--red-suave);
-  color: #b91c1c;
+  color: var(--red-text);
   border-color: var(--red-border);
 }
 .notice-shadow {
   background: var(--amber-suave);
-  color: #92400e;
+  color: var(--amber-text);
   border-color: var(--amber-border);
   font-size: 13px;
 }
@@ -84,6 +84,7 @@
   border-radius: 4px;
 }
 .notice-close:hover { background: rgba(0, 0, 0, 0.06); }
+[data-theme='dark'] .notice-close:hover { background: rgba(255, 255, 255, 0.08); }
 
 /* --- Toast stack (top-right) --- */
 .toast-viewport {

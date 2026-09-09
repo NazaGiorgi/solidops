@@ -25,8 +25,8 @@ function ChartTooltip({
   return (
     <div
       style={{
-        background: '#fff',
-        border: '1px solid #e2e8f0',
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
         borderRadius: 8,
         padding: '8px 12px',
         fontSize: 13,
@@ -34,7 +34,7 @@ function ChartTooltip({
       }}
     >
       <div style={{ fontWeight: 600 }}>{name}</div>
-      <div style={{ color: '#475569' }}>
+      <div style={{ color: 'var(--text-soft)' }}>
         <b>{value}</b> tickets ({pct}%)
       </div>
     </div>

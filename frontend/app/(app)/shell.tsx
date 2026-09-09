@@ -10,6 +10,7 @@ import { useNewTicketToast } from '../../components/use-new-ticket-toast';
 import { BrandLogo } from '../../components/brand-logo';
 import { api } from '../../lib/api';
 import { isSoundEnabled, setSoundEnabled, subscribeSound } from '../../lib/sound';
+import { useTheme } from '../../lib/theme';
 
 interface NavItem {
   href: string;
@@ -111,6 +112,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [savedViews, setSavedViews] = useState<TrayView[]>([]);
   const [soundOn, setSoundOn] = useState(isSoundEnabled());
   useEffect(() => subscribeSound(() => setSoundOn(isSoundEnabled())), []);
+  const { theme, toggle } = useTheme();
   // Live notifications + unread count.
   useNotificationsSocket((n: NotificationEvent) => {
     if (!n.readAt) setUnread((c) => c + 1);
@@ -234,6 +236,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
               title={soundOn ? 'Sonido activado — silenciar notificaciones' : 'Sonido silenciado — activar notificaciones'}
             >
               {soundOn ? '🔊' : '🔇'}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={toggle}
+              title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
+            >
+              {theme === 'dark' ? '☀️' : '🌙'}
             </button>
             <button className="btn btn-ghost btn-sm" onClick={logout}>
               salir

@@ -447,7 +447,7 @@ function WeekGrid({
               <div style={{ fontWeight: 500, fontSize: 13 }}>
                 {a.subject || 'sin título'}
                 {a.ticket?.id && (
-                  <Link href={`/tickets/${a.ticket.id}`} style={{ marginLeft: 6, color: '#2563eb' }} title="Ver ticket" onClick={(e) => e.stopPropagation()}>
+                  <Link href={`/tickets/${a.ticket.id}`} style={{ marginLeft: 6, color: 'var(--blue)' }} title="Ver ticket" onClick={(e) => e.stopPropagation()}>
                     🔗 ticket
                   </Link>
                 )}
