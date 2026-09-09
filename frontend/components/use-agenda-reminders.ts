@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { api, getToken } from '../lib/api';
 import { useToast } from './toast';
+import { playReminderChime } from '../lib/sound';
 
 interface ApptReminder {
   id: string;
@@ -9,31 +10,6 @@ interface ApptReminder {
   startAt: string;
   reminderMinutes: number | null;
   technician?: { user?: { name?: string } } | null;
-}
-
-// Short chime for agenda alarms (Web Audio — no external asset needed).
-function playChime() {
-  try {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ctx = new Ctx();
-    const now = ctx.currentTime;
-    // Two soft tones: 880Hz then 660Hz, gentle decay.
-    const freqs = [880, 660];
-    freqs.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.0001, now + i * 0.15);
-      gain.gain.exponentialRampToValueAtTime(0.12, now + i * 0.15 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.15 + 0.25);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(now + i * 0.15);
-      osc.stop(now + i * 0.15 + 0.3);
-    });
-  } catch {
-    /* sound is best-effort; silence on failure */
-  }
 }
 
 // Polls for appointments whose reminder threshold is about to hit and fires a
@@ -118,7 +94,7 @@ export function useAgendaReminders() {
             // eslint-disable-next-line no-console
             console.log('[reminders] CALLING showToast', a.id);
             const minsLeft = Math.max(0, Math.round((start - now) / 60000));
-            playChime();
+            playReminderChime();
             push({
               title: `⏰ ${a.subject || 'Turno próximo'}`,
               body: `${a.technician?.user?.name || 'Técnico'} · empieza en ${minsLeft} min`,

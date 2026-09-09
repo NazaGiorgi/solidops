@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useToast } from './toast';
 import { API_URL, getToken } from '../lib/api';
+import { playNewTicketSound } from '../lib/sound';
 
 interface NewTicketPayload {
   id: string;
@@ -31,6 +32,7 @@ export function useNewTicketToast() {
     });
     socket.on('ticket:new', (payload: NewTicketPayload) => {
       if (!payload?.id || !payload?.title) return;
+      playNewTicketSound();
       push({
         title: `🎫 Nuevo ticket: ${payload.title}`,
         body: [payload.customerName ? `Cliente: ${payload.customerName}` : null, payload.technicianName ? `Técnico: ${payload.technicianName}` : null]

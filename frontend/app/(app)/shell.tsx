@@ -9,6 +9,7 @@ import { useAgendaReminders } from '../../components/use-agenda-reminders';
 import { useNewTicketToast } from '../../components/use-new-ticket-toast';
 import { BrandLogo } from '../../components/brand-logo';
 import { api } from '../../lib/api';
+import { isSoundEnabled, setSoundEnabled, subscribeSound } from '../../lib/sound';
 
 interface NavItem {
   href: string;
@@ -108,6 +109,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [trayGroups, setTrayGroups] = useState<TrayGroup[]>([]);
   const [ticketGroups, setTicketGroups] = useState<TicketGroup[]>([]);
   const [savedViews, setSavedViews] = useState<TrayView[]>([]);
+  const [soundOn, setSoundOn] = useState(isSoundEnabled());
+  useEffect(() => subscribeSound(() => setSoundOn(isSoundEnabled())), []);
   // Live notifications + unread count.
   useNotificationsSocket((n: NotificationEvent) => {
     if (!n.readAt) setUnread((c) => c + 1);
@@ -225,6 +228,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 {user.role}
               </div>
             </div>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setSoundEnabled(!soundOn)}
+              title={soundOn ? 'Sonido activado — silenciar notificaciones' : 'Sonido silenciado — activar notificaciones'}
+            >
+              {soundOn ? '🔊' : '🔇'}
+            </button>
             <button className="btn btn-ghost btn-sm" onClick={logout}>
               salir
             </button>
