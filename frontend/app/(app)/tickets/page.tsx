@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, useEffect, useCallback, useState } from 'react';
+import { Suspense, useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { api } from '../../../lib/api';
 import { Shell } from '../shell';
@@ -8,6 +8,7 @@ import { PageHeader, Card, Empty } from '../../../components/ui';
 import { TicketList } from '../../../components/ticket-list';
 import { ErrorNotice } from '../../../components/error-notice';
 import { STATUS_LABELS } from '../../../lib/helpers';
+import { useTicketEvents } from '../../../lib/use-ticket-events';
 
 interface Ticket {
   id: string;
@@ -109,7 +110,7 @@ function TicketsContent({
     { v: 'all', l: 'Todas' },
   ];
 
-  function load() {
+  function load(silent = false) {
     const query: string[] = [];
     if (customerId) query.push(`customerId=${customerId}`);
     if (status) query.push(`status=${status}`);
@@ -121,6 +122,9 @@ function TicketsContent({
     if (page) query.push(`page=${page}`);
     if (pageSize) query.push(`take=${pageSize}`);
     const qs = query.length ? `?${query.join('&')}` : '';
+    // Modo silencioso: no muestra "cargando…" ni mueve la lista (para el
+    // auto-refresco por Socket.IO, sin parpadeos ni saltos de scroll).
+    if (!silent) setLoading(true);
     api
       .get<{ items: Ticket[]; total: number; page: number }>(`/tickets${qs}`)
       .then((res) => {
@@ -141,6 +145,21 @@ function TicketsContent({
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, merge, tray, view, customerId, showShadow, page]);
+
+  // Auto-refresco en vivo (estilo Zammad): ante un ticket nuevo o una
+  // respuesta de cliente, recarga la lista en SILENCIO (sin "cargando…" ni
+  // saltos de scroll) y RESPETANDO los filtros actuales (tray, estado, merge,
+  // búsqueda). Las ráfagas de eventos se agrupan (máx. 1 refetch por segundo).
+  const loadRef = useRef(() => load(true));
+  loadRef.current = () => load(true);
+  const lastRefresh = useRef(0);
+  useTicketEvents((type) => {
+    if (type !== 'ticket:new' && type !== 'ticket:client-reply' && type !== 'ticket:updated') return;
+    const now = Date.now();
+    if (now - lastRefresh.current < 1000) return;
+    lastRefresh.current = now;
+    loadRef.current();
+  });
 
   function changeTray(next: string) {
     const params = new URLSearchParams(useSP.toString());

@@ -1,37 +1,20 @@
 'use client';
-import { useEffect } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { useToast } from './toast';
-import { API_URL, getToken } from '../lib/api';
-import { playNewTicketSound } from '../lib/sound';
-
-interface NewTicketPayload {
-  id: string;
-  title: string;
-  customerName?: string | null;
-  technicianName?: string | null;
-  status?: string;
-  priority?: string;
-  createdAt?: string;
-}
+import { useTicketEvents } from '../lib/use-ticket-events';
+import { playNewTicketSound, playClientReplySound } from '../lib/sound';
+import { CHANNEL_LABELS } from '../lib/helpers';
 
 // Muestra una notificación flotante (toast) estilo Zammad cuando llega un TICKET
-// NUEVO al sistema (manual o por email), en CUALQUIER pantalla. Usa su propio
-// Socket.IO (evento 'ticket:new') para no interferir con 'notification:new' que
-// ya usa el Shell para el contador de no leídas. Auto-cierra a los 8s; el clic
-// lleva directo al ticket.
+// NUEVO (manual, por email o por portal) o una RESPUESTA DE CLIENTE a un ticket
+// ya abierto (WhatsApp/email/portal), en CUALQUIER pantalla. Usa Socket.IO
+// (eventos 'ticket:new' y 'ticket:client-reply') sin interferir con
+// 'notification:new' que ya usa el Shell para el contador de no leídas.
+// Auto-cierra a los 8s; el clic lleva directo al ticket.
 export function useNewTicketToast() {
   const { push } = useToast();
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    const socket: Socket = io(API_URL, {
-      transports: ['websocket'],
-      path: '/socket.io',
-      auth: { token },
-    });
-    socket.on('ticket:new', (payload: NewTicketPayload) => {
-      if (!payload?.id || !payload?.title) return;
+  useTicketEvents((type, payload) => {
+    if (!payload?.id || !payload?.title) return;
+    if (type === 'ticket:new') {
       playNewTicketSound();
       push({
         title: `🎫 Nuevo ticket: ${payload.title}`,
@@ -42,9 +25,16 @@ export function useNewTicketToast() {
         actionHref: `/tickets/${payload.id}`,
         actionLabel: 'abrir ticket →',
       });
-    });
-    return () => {
-      socket.disconnect();
-    };
-  }, [push]);
+    } else {
+      const channel = CHANNEL_LABELS[payload.channel || ''] || payload.channel || 'mensaje';
+      playClientReplySound();
+      push({
+        title: `💬 ${channel}: respuesta de ${payload.customerName || 'cliente'} · ${payload.title}`,
+        body: payload.preview ? payload.preview.trim() : undefined,
+        tone: 'info',
+        actionHref: `/tickets/${payload.id}`,
+        actionLabel: 'abrir ticket →',
+      });
+    }
+  });
 }

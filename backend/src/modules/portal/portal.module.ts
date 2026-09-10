@@ -15,6 +15,7 @@ import { PortalGuard } from './portal.guard';
 import { PasswordResetService } from '../../common/auth/password-reset.service';
 import { RateLimitService } from '../../common/auth/rate-limit.service';
 import { WorkshopModule } from '../workshop/workshop.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { WorkshopModule } from '../workshop/workshop.module';
       }),
     }),
     WorkshopModule,
+    NotificationsModule,
   ],
   controllers: [PortalController, PortalAccountsController],
   providers: [PortalService, PortalGuard, PasswordResetService, RateLimitService],

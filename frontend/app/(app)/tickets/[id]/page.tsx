@@ -20,6 +20,7 @@ import {
   CHANNEL_LABELS,
   ticketNumberDisplay,
 } from '../../../../lib/helpers';
+import { useTicketEvents } from '../../../../lib/use-ticket-events';
 
 interface TicketDetail {
   id: string;
@@ -182,15 +183,22 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
     }
   }
 
-  async function load() {
+  // Carga el detalle. `resetForm` = true refresca también los selectores
+  // (estado/prioridad/técnico), para después de guardar/fusionar. En modo
+  // silencioso (auto-refresco en vivo) NO se tocan esos selecores ni se muestra
+  // error: así no se pisa una edición a medio hacer ni el texto del cuadro de
+  // respuesta (que vive en `body`).
+  async function load(resetForm = true) {
     try {
       const d = await api.get<TicketDetail>(`/tickets/${params.id}`);
       setTicket(d);
-      setData({
-        status: d.status,
-        priority: d.priority,
-        technicianId: d.technician?.id,
-      });
+      if (resetForm) {
+        setData({
+          status: d.status,
+          priority: d.priority,
+          technicianId: d.technician?.id,
+        });
+      }
       // Load merge candidates: other open tickets of the same customer.
       if (d.customer?.id) {
         api
@@ -206,7 +214,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           .catch(() => {});
       }
     } catch (e) {
-      setError((e as Error).message);
+      if (resetForm) setError((e as Error).message);
     }
   }
 
@@ -218,6 +226,27 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-refresco en vivo del ticket abierto (estilo Zammad): si el cliente
+  // responde por WhatsApp/email/portal y el staff tiene este ticket abierto, se
+  // actualizan los mensajes automáticamente. No toca `data` (selecciones en
+  // curso) ni `body` (texto a medio escribir). Solo baja el scroll si el staff
+  // estaba leyendo cerca del final; si está más arriba, no se mueve nada.
+  useTicketEvents((type, payload) => {
+    if (!payload?.id || payload.id !== params.id) return;
+    if (type !== 'ticket:new' && type !== 'ticket:client-reply' && type !== 'ticket:updated') return;
+    void (async () => {
+      const canScroll = type === 'ticket:client-reply';
+      const nearBottom =
+        canScroll &&
+        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
+      const prevHeight = document.documentElement.scrollHeight;
+      await load(false);
+      if (nearBottom && document.documentElement.scrollHeight > prevHeight) {
+        requestAnimationFrame(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      }
+    })();
+  });
 
   // Buscador de clientes para "Vincular a cliente existente" (debounce 300ms).
   useEffect(() => {

@@ -21,6 +21,7 @@ import { normalizeSubjectKey } from '../../common/utils/subject-key.util';
 import { extractEmailDomain, isPersonalEmailDomain } from '../../common/utils/email-domain';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { WorkshopService } from '../workshop/workshop.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
 
 const FORGOT_OK = { ok: true };
 
@@ -51,6 +52,7 @@ export class PortalService {
     private readonly audit: AuditService,
     private readonly workshop: WorkshopService,
     private readonly dataSource: DataSource,
+    private readonly gateway: NotificationsGateway,
   ) {}
 
   async login(email: string, password: string, ip = '127.0.0.1') {
@@ -222,6 +224,7 @@ export class PortalService {
         body: dto.description ?? '(sin descripción)',
       }),
     );
+    await this.emitPortalTicketEvent(saved, 'ticket:new', dto.description ?? '(sin descripción)');
     return this.getTicket(saved.id, customerId);
   }
 
@@ -236,7 +239,37 @@ export class PortalService {
       body,
     });
     await this.messages.save(message);
+    await this.emitPortalTicketEvent(t, 'ticket:client-reply', body);
     return this.getTicket(ticketId, customerId);
+  }
+
+  // Broadcast efímero por Socket.IO para eventos de ticket originados en el
+  // portal de clientes. 'ticket:new' = el cliente creó un ticket nuevo;
+  // 'ticket:client-reply' = el cliente respondió a un ticket ya existente.
+  // Best-effort: nunca rompe el flujo del portal si el socket falla.
+  private async emitPortalTicketEvent(
+    ticket: Ticket,
+    event: 'ticket:new' | 'ticket:client-reply',
+    preview: string,
+  ): Promise<void> {
+    try {
+      const customer = ticket.customerId
+        ? await this.customers.findOne({ where: { id: ticket.customerId } })
+        : null;
+      this.gateway.broadcast(event, {
+        id: ticket.id,
+        title: ticket.title,
+        customerName: customer?.name ?? null,
+        technicianName: null,
+        status: ticket.status,
+        priority: ticket.priority,
+        channel: TicketChannel.PORTAL,
+        preview: preview.slice(0, 160),
+        createdAt: new Date().toISOString(),
+      });
+    } catch {
+      // El broadcast es best-effort: no debe romper la creación del ticket.
+    }
   }
 
   // Reports for the client portal: only the customer's own tickets, by

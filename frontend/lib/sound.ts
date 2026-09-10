@@ -87,6 +87,18 @@ export function playNewTicketSound(): void {
   }
 }
 
+// Respuesta de cliente a un ticket existente: tríada DESCENDENTE (G5-E5-C5),
+// deliberadamente distinta del ticket nuevo (ascendente) y del chime de agenda.
+export function playClientReplySound(): void {
+  if (!loadPreference()) return;
+  try {
+    playTones([783.99, 659.25, 523.25], 0.12, 0.22, 0.11);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[sound] respuesta de cliente: play() bloqueado por autoplay', e);
+  }
+}
+
 // Recordatorio de agenda: dos tonos suaves 880Hz luego 660Hz (chime histórico).
 export function playReminderChime(): void {
   if (!loadPreference()) return;

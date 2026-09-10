@@ -481,6 +481,8 @@ export class TicketsService {
         newValue: changed,
         meta: { changedFields: Object.keys(changed) },
       });
+      // Otros staff ven el cambio (estado/prioridad/asignación/título) en vivo.
+      await this.emitTicketUpdatedBroadcast(t);
     }
 
     if (t.technicianId && priorTech !== t.technicianId) {
@@ -553,6 +555,7 @@ export class TicketsService {
       newValue: { technicianId: dto.technicianId },
     });
     await this.notifyAssignee(dto.technicianId, id, t.title);
+    await this.emitTicketUpdatedBroadcast(t);
     return this.findOne(id, actor);
   }
 
@@ -651,6 +654,7 @@ export class TicketsService {
         newValue: { status },
         meta: { bulk: true, action: 'bulk_status_change' },
       });
+      await this.emitTicketUpdatedBroadcast(ticket);
       changed++;
     }
     return { changed, count: rows.length };
@@ -982,6 +986,11 @@ export class TicketsService {
       );
       await this.saveAttachments(msg.id, data.attachments);
       await this.ensurePortalEnabled(data.contactId);
+      await this.emitClientReplyBroadcast(
+        existing,
+        data.body ?? '(sin contenido)',
+        TicketChannel.EMAIL,
+      );
       return { ticket: existing, action: 'appended' };
     }
 
@@ -1080,6 +1089,12 @@ export class TicketsService {
         );
         await this.saveAttachments(saved.id, m.attachments);
       }
+      // Solo si hay un mensaje de ORIGEN CLIENTE (no del bot): es la respuesta a
+      // una conversación ya abierta → evento de socket ticket:client-reply.
+      const clientMsg = data.messages.find((m) => m.author === 'cliente');
+      if (clientMsg) {
+        await this.emitClientReplyBroadcast(open, clientMsg.body, TicketChannel.WHATSAPP);
+      }
       return { ticket: open, action: 'appended' };
     }
 
@@ -1158,10 +1173,64 @@ export class TicketsService {
         technicianName: (tech as unknown as { user?: { name?: string } } | null)?.user?.name ?? null,
         status: ticket.status,
         priority: ticket.priority,
+        channel: ticket.source ?? null,
         createdAt: ticket.createdAt,
       });
     } catch {
       // El broadcast es best-effort: no debe romper la creación del ticket.
+    }
+  }
+
+  // Notifica (broadcast) que un CLIENTE respondió a un TICKET YA EXISTENTE
+  // (WhatsApp, email o portal). Complementa a emitNewTicketBroadcast: se dispara
+  // cuando el hilo ya estaba abierto y llega un mensaje de origen cliente, para
+  // que el frontend suene + muestre el toast y refresque la lista/detalle.
+  private async emitClientReplyBroadcast(
+    ticket: Ticket,
+    preview: string,
+    channel: TicketChannel,
+  ): Promise<void> {
+    try {
+      const customer = ticket.customerId
+        ? await this.customers.findOne({ where: { id: ticket.customerId } })
+        : null;
+      const tech = ticket.technicianId
+        ? await this.technicians.findOne({ where: { id: ticket.technicianId }, relations: ['user'] })
+        : null;
+      this.gateway.broadcast('ticket:client-reply', {
+        id: ticket.id,
+        title: ticket.title,
+        customerName: customer?.name ?? null,
+        technicianName: (tech as unknown as { user?: { name?: string } } | null)?.user?.name ?? null,
+        status: ticket.status,
+        priority: ticket.priority,
+        channel,
+        preview: preview.slice(0, 160),
+        createdAt: new Date().toISOString(),
+      });
+    } catch {
+      // El broadcast es best-effort: no debe romper la actualización del ticket.
+    }
+  }
+
+  // Notifica (broadcast) un CAMBIO de estado/prioridad/asignación/título en un
+  // ticket, para que que la lista de tickets de los demás staff se actualice en
+  // vivo. No dispara sonido en el frontend: solo refresco silencioso.
+  private async emitTicketUpdatedBroadcast(ticket: Ticket): Promise<void> {
+    try {
+      const tech = ticket.technicianId
+        ? await this.technicians.findOne({ where: { id: ticket.technicianId }, relations: ['user'] })
+        : null;
+      this.gateway.broadcast('ticket:updated', {
+        id: ticket.id,
+        title: ticket.title,
+        status: ticket.status,
+        priority: ticket.priority,
+        technicianName: (tech as unknown as { user?: { name?: string } } | null)?.user?.name ?? null,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch {
+      // El broadcast es best-effort: no debe romper la actualización del ticket.
     }
   }
 }
