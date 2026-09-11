@@ -101,6 +101,7 @@ const HIDDEN_TRAY_GROUPS = new Set(['Backups MK']);
 // Preferencias de colapso del sidebar (localStorage).
 const KEY_TICKETS_COLLAPSED = 'solidops_tickets_sidebar_collapsed';
 const KEY_BOX_COLLAPSED = 'solidops_sidebar_box_collapsed';
+const KEY_VIEWS_COLLAPSED = 'solidops_sidebar_views_collapsed';
 
 function readFlag(key: string): boolean {
   try {
@@ -416,6 +417,19 @@ function TicketSidebarLinks({
     setCollapsedBoxes(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalog.length]);
+  // Colapso de la sección "Vistas" (vistas guardadas / overviews de Zammad),
+  // independiente del colapso de boxes. Se hidrata en un effect (no init) para
+  // no divergir entre render de servidor y cliente.
+  const [viewsCollapsed, setViewsCollapsed] = useState(false);
+  useEffect(() => {
+    setViewsCollapsed(readFlag(KEY_VIEWS_COLLAPSED));
+  }, []);
+  const toggleViews = () => {
+    setViewsCollapsed((c) => {
+      writeFlag(KEY_VIEWS_COLLAPSED, !c);
+      return !c;
+    });
+  };
   const toggleBox = (id: string) => {
     setCollapsedBoxes((prev) => {
       const next = new Set(prev);
@@ -536,7 +550,20 @@ function TicketSidebarLinks({
               className="sidebar-sub"
               style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 4, paddingTop: 4 }}
             >
-              {sortedViews.map((v) => {
+              <div className="sidebar-tray-row">
+                <button
+                  className="sidebar-chevron"
+                  onClick={toggleViews}
+                  aria-expanded={!viewsCollapsed}
+                  title={viewsCollapsed ? 'Expandir vistas guardadas' : 'Colapsar vistas guardadas'}
+                >
+                  {viewsCollapsed ? '▸' : '▾'}
+                </button>
+                <span className="sidebar-link sidebar-link-sub sidebar-tray-link sidebar-views-label">
+                  Vistas
+                </span>
+              </div>
+              {!viewsCollapsed && sortedViews.map((v) => {
                 const active = isTickets && view === v.id;
                 return (
                   <Link

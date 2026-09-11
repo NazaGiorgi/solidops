@@ -31,7 +31,7 @@ const MODULE_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'workshop', label: 'Taller' },
 ];
 
-const EMPTY_FORM = { name: '', color: '', sortOrder: '0', moduleKey: '' };
+const EMPTY_FORM = { name: '', color: '', sortOrder: '0', moduleKey: '', parentId: '' };
 
 export default function AdminBoxesPage() {
   const [boxes, setBoxes] = useState<BoxRow[]>([]);
@@ -67,7 +67,7 @@ export default function AdminBoxesPage() {
   }
   function openEdit(b: BoxRow) {
     setEditing(b);
-    setForm({ name: b.name, color: b.color || '', sortOrder: String(b.sortOrder ?? 0), moduleKey: b.moduleKey || '' });
+    setForm({ name: b.name, color: b.color || '', sortOrder: String(b.sortOrder ?? 0), moduleKey: b.moduleKey || '', parentId: '' });
     setFormOpen(true);
   }
 
@@ -84,7 +84,9 @@ export default function AdminBoxesPage() {
       if (editing) {
         await api.patch(`/ticket-groups/${editing.id}`, payload);
       } else {
-        await api.post('/ticket-groups', payload);
+        // Al crear se puede elegir el contenedor padre en el mismo paso;
+        // '' = nivel superior (sin contenedor).
+        await api.post('/ticket-groups', { ...payload, parentId: form.parentId || null });
       }
       setNotice('Box guardado');
       setTimeout(() => setNotice(''), 2500);
@@ -222,6 +224,20 @@ export default function AdminBoxesPage() {
                 Los tickets que crea este módulo caen en este box. Solo un box activo por módulo.
               </span>
             </div>
+            {!editing && (
+              <div className="field">
+                <label>Crear dentro de…</label>
+                <select className="select" value={form.parentId} onChange={(e) => set('parentId', e.target.value)}>
+                  <option value="">Nivel superior (sin contenedor)</option>
+                  {boxes.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+                <span className="card-meta" style={{ display: 'block' }}>
+                  Creás el box ya anidado como hijo de ese contenedor; después lo podés mover con «mover a…».
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex" style={{ gap: 8 }}>
             <button className="btn btn-primary" onClick={save} disabled={busy}>

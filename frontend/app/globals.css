@@ -756,6 +756,7 @@ body {
   padding: 4px 2px 4px 4px;
 }
 .sidebar-chevron:hover { color: var(--text); }
+.sidebar-views-label { cursor: default; font-weight: 500; letter-spacing: 0.3px; }
 .sidebar-tray-move {
   flex: none;
   background: none;

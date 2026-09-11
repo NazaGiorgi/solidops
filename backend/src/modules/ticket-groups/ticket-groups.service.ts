@@ -140,6 +140,18 @@ export class TicketGroupsService {
     if (conflict) {
       throw new BadRequestException(`El módulo ya está asignado al box "${conflict.name}".`);
     }
+    // Contenedor padre al crear (igual validación que al mover: debe existir y
+    // estar activo; un box nuevo no puede tener descendientes, así que no hay
+    // riesgo de ciclo).
+    let parentId: string | null = null;
+    if (dto.parentId) {
+      const parent = await this.groups.findOne({ where: { id: dto.parentId } });
+      if (!parent) throw new NotFoundException('Box contenedor no encontrado');
+      if (!parent.active) {
+        throw new BadRequestException(`El box contenedor "${parent.name}" está desactivado.`);
+      }
+      parentId = parent.id;
+    }
     const saved = await this.groups.save(
       this.groups.create({
         name,
@@ -147,6 +159,7 @@ export class TicketGroupsService {
         sortOrder: dto.sortOrder ?? 0,
         active: dto.active ?? true,
         moduleKey: dto.moduleKey ?? null,
+        parentId,
       }),
     );
     await this.audit.log({
@@ -154,7 +167,7 @@ export class TicketGroupsService {
       action: AuditAction.CREATE,
       entityType: AuditEntityType.TICKET_GROUP,
       entityId: saved.id,
-      newValue: { name: saved.name, sortOrder: saved.sortOrder, moduleKey: saved.moduleKey },
+      newValue: { name: saved.name, sortOrder: saved.sortOrder, moduleKey: saved.moduleKey, parentId: saved.parentId },
     });
     return saved;
   }

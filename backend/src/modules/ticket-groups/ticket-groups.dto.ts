@@ -24,6 +24,13 @@ export class CreateTicketGroupDto {
   @IsString()
   @MaxLength(40)
   moduleKey?: string | null;
+
+  // Contenedor padre opcional al crear: permite crear un box ya anidado en un
+  // solo paso. null/ausente = nivel superior (sin contenedor). Debe existir y
+  // estar activo (validación en el servicio).
+  @IsOptional()
+  @IsUUID()
+  parentId?: string | null;
 }
 
 export class UpdateTicketGroupDto {
