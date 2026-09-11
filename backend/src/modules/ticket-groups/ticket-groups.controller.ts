@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { TicketGroupsService } from './ticket-groups.service';
-import { CreateTicketGroupDto, UpdateTicketGroupDto, DeactivateTicketGroupDto } from './ticket-groups.dto';
+import { CreateTicketGroupDto, UpdateTicketGroupDto, DeactivateTicketGroupDto, MoveTicketGroupDto } from './ticket-groups.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Permissions } from '../../common/guards/permissions-key.decorator';
 import { PERMISSIONS } from '../../common/auth/permissions';
@@ -38,6 +38,14 @@ export class TicketGroupsController {
   @Roles(RoleName.ADMINISTRADOR, RoleName.SUPERVISOR)
   update(@Param('id') id: string, @Body() dto: UpdateTicketGroupDto, @CurrentUser() user: AuthenticatedUser) {
     return this.service.update(id, dto, user);
+  }
+
+  // Mover/promover un box a otro contenedor (o al nivel superior con parentId:null).
+  // Mismo gate de roles que las demás mutaciones del catálogo.
+  @Patch(':id/move')
+  @Roles(RoleName.ADMINISTRADOR, RoleName.SUPERVISOR)
+  move(@Param('id') id: string, @Body() dto: MoveTicketGroupDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.service.move(id, dto, user);
   }
 
   @Delete(':id')

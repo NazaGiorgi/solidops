@@ -4,7 +4,7 @@ import { DataSource, Repository } from 'typeorm';
 import { TicketGroup } from '../../entities/ticket-group.entity';
 import { Ticket } from '../../entities/ticket.entity';
 import { MailboxRule } from '../../entities/mailbox-rule.entity';
-import { CreateTicketGroupDto, UpdateTicketGroupDto, DeactivateTicketGroupDto } from './ticket-groups.dto';
+import { CreateTicketGroupDto, UpdateTicketGroupDto, DeactivateTicketGroupDto, MoveTicketGroupDto } from './ticket-groups.dto';
 import { AuditAction, AuditEntityType } from '../../common/enums';
 import { AuditService } from '../audit/audit.service';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -63,9 +63,66 @@ export class TicketGroupsService {
     return { ticketCount, ruleCount };
   }
 
-  async listWithCounts(): Promise<Array<TicketGroup & { ticketCount: number; ruleCount: number }>> {
+  async listWithCounts(): Promise<Array<TicketGroup & { ticketCount: number; aggregateCount: number; childrenCount: number; ruleCount: number }>> {
     const groups = await this.groups.find({ order: { sortOrder: 'ASC', name: 'ASC' } });
-    return Promise.all(groups.map(async (g) => ({ ...g, ...(await this.counts(g)) })));
+
+    // Conteos de tickets por legacy_group (una sola query; NULL = bucket 'nativo',
+    // que no es un box real y no participa en el árbol).
+    const directRows = await this.tickets
+      .createQueryBuilder('t')
+      .select('t.legacy_group', 'groupName')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('t.legacy_group')
+      .getRawMany<{ groupName: string | null; count: string }>();
+    const direct = new Map<string, number>();
+    for (const r of directRows) {
+      const name = r.groupName ?? '';
+      direct.set(name, (direct.get(name) ?? 0) + Number(r.count));
+    }
+
+    // Conteos de reglas de mailbox por box (una sola query).
+    const ruleRows = await this.mailboxRules
+      .createQueryBuilder('r')
+      .select('r.target_group_id', 'id')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('r.target_group_id')
+      .getRawMany<{ id: string | null; count: string }>();
+    const rules = new Map<string, number>();
+    for (const r of ruleRows) {
+      if (r.id) rules.set(r.id, Number(r.count));
+    }
+
+    // Árbol de contenedores: hijos por parentId, respetando sortOrder/name (mismo
+    // orden que ya usaba el sidebar para la lista plana).
+    const childrenByParent = new Map<string, TicketGroup[]>();
+    for (const g of groups) {
+      if (g.parentId) {
+        const arr = childrenByParent.get(g.parentId) ?? [];
+        arr.push(g);
+        childrenByParent.set(g.parentId, arr);
+      }
+    }
+
+    // Conteo AGREGADO recursivo (propio + todos los descendientes): es lo que el
+    // sidebar muestra en un box contenedor. Los tickets de un sub-box siguen
+    // perteneciendo a ese sub-box (legacy_group), pero el contenedor los suma.
+    const memo = new Map<string, number>();
+    const aggregate = (g: TicketGroup): number => {
+      const cached = memo.get(g.id);
+      if (cached !== undefined) return cached;
+      let sum = direct.get(g.name) ?? 0;
+      for (const c of childrenByParent.get(g.id) ?? []) sum += aggregate(c);
+      memo.set(g.id, sum);
+      return sum;
+    };
+
+    return groups.map((g) => ({
+      ...g,
+      ticketCount: direct.get(g.name) ?? 0,
+      aggregateCount: aggregate(g),
+      childrenCount: childrenByParent.get(g.id)?.length ?? 0,
+      ruleCount: rules.get(g.id) ?? 0,
+    }));
   }
 
   async findOneWithCounts(id: string): Promise<(TicketGroup & { ticketCount: number; ruleCount: number }) | null> {
@@ -131,6 +188,59 @@ export class TicketGroupsService {
       entityId: id,
       oldValue: old,
       newValue: { name: saved.name, color: saved.color, sortOrder: saved.sortOrder, active: saved.active, moduleKey: saved.moduleKey },
+    });
+    return saved;
+  }
+
+  // Mueve un box a otro contenedor (parentId = UUID) o lo promueve al nivel
+  // superior (parentId = null). Solo se reasigna parentId: la pertenencia de
+  // tickets (legacy_group) no se toca y los contadores se mantienen. Valida que
+  // el destino exista y esté activo, y que no se creen ciclos (mover un box
+  // dentro de sí mismo o dentro de uno de sus propios descendientes).
+  async move(id: string, dto: MoveTicketGroupDto, actor: AuthenticatedUser): Promise<TicketGroup> {
+    const group = await this.groups.findOne({ where: { id } });
+    if (!group) throw new NotFoundException('Box no encontrado');
+
+    const parentId = dto.parentId;
+    if (parentId === null && group.parentId === null) {
+      throw new BadRequestException('El box ya está en el nivel superior.');
+    }
+    if (parentId !== null) {
+      if (parentId === group.id) {
+        throw new BadRequestException('No se puede mover un box dentro de sí mismo.');
+      }
+      const parent = await this.groups.findOne({ where: { id: parentId } });
+      if (!parent) throw new NotFoundException('Box contenedor no encontrado');
+      if (!parent.active) {
+        throw new BadRequestException(`El box contenedor "${parent.name}" está desactivado.`);
+      }
+      // Anti-ciclo: si algún ancestro del destino es este mismo box, moverlo ahí
+      // crearía un ciclo. Se recorre con `seen` por si ya existiera un ciclo
+      // (datos corrompidos a mano) y no quedarse ciclando infinito.
+      const seen = new Set<string>();
+      let cursor: TicketGroup | null = parent;
+      while (cursor && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        if (cursor.id === group.id) {
+          throw new BadRequestException('No se puede mover un box dentro de uno de sus propios sub-boxes.');
+        }
+        cursor = cursor.parentId
+          ? await this.groups.findOne({ where: { id: cursor.parentId } })
+          : null;
+      }
+    }
+
+    const oldParentId = group.parentId;
+    group.parentId = parentId;
+    const saved = await this.groups.save(group);
+    await this.audit.log({
+      user: actor,
+      action: AuditAction.UPDATE,
+      entityType: AuditEntityType.TICKET_GROUP,
+      entityId: id,
+      oldValue: { parentId: oldParentId },
+      newValue: { parentId: saved.parentId },
+      meta: { action: 'move_box', promoteToRoot: parentId === null },
     });
     return saved;
   }

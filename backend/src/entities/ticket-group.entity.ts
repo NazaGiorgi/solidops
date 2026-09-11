@@ -1,4 +1,4 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from '../common/entities/base.entity';
 
 // Catálogo de "boxes" (grupos/bandejas de tickets). Reemplaza el uso de la
@@ -6,6 +6,12 @@ import { BaseEntity } from '../common/entities/base.entity';
 // acá, editable desde el Panel de Administración. El nombre coincide con el
 // valor que se guarda en `tickets.legacy_group` (se mantiene string para no
 // romper todo el código que hoy filtra/cuenta por ese campo).
+//
+// Jerarquía: `parentId` (nullable) permite anidar boxes dentro de otros boxes
+// ("contenedores"). parentId = NULL es el nivel superior — en el sidebar son
+// los boxes que quedan directo bajo el ítem "Tickets". Mover/promover un box
+// solo reasigna parentId: tickets.legacy_group no se toca, así los contadores
+// se mantienen. Un box puede tener tickets propios Y ser contenedor a la vez.
 @Entity('ticket_groups')
 // Solo puede haber un box ACTIVO por moduleKey (índice único parcial).
 @Index(['moduleKey'], { unique: true, where: '"active" = true AND "module_key" IS NOT NULL' })
@@ -18,6 +24,19 @@ export class TicketGroup extends BaseEntity {
   // Color para diferenciar boxes visualmente en el sidebar (opcional).
   @Column({ type: 'varchar', length: 20, nullable: true })
   color: string | null;
+
+  // Contiene este box adentro de otro ("contenedor"). NULL = nivel superior
+  // (bajo el ítem "Tickets" del sidebar). El FK es self-referencial.
+  @Index()
+  @Column({ name: 'parent_id', type: 'uuid', nullable: true })
+  parentId: string | null;
+
+  @ManyToOne(() => TicketGroup, (g) => g.children, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'parent_id' })
+  parent: TicketGroup | null;
+
+  @OneToMany(() => TicketGroup, (g) => g.parent)
+  children: TicketGroup[];
 
   // Orden de aparición en el menú lateral (menor = más arriba).
   @Column({ name: 'sort_order', type: 'int', default: 0 })

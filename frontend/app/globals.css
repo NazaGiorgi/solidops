@@ -726,6 +726,75 @@ body {
 }
 .sidebar-link-sub:hover { color: var(--text); }
 
+/* Árbol de boxes del sidebar: cada fila es chevron + link + botón "Mover a…".
+   Los hijos de un contenedor se anidan con .sidebar-tray-children. */
+.sidebar-tray-row {
+  display: flex;
+  align-items: center;
+}
+.sidebar-tray-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.sidebar-tray-children {
+  display: flex;
+  flex-direction: column;
+  padding-left: 14px;
+}
+.sidebar-chevron {
+  flex: none;
+  width: 20px;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 2px 4px 4px;
+}
+.sidebar-chevron:hover { color: var(--text); }
+.sidebar-tray-move {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+.sidebar-tray-move:hover { color: var(--text); background: var(--border); border-radius: 4px; }
+.sidebar-move-select {
+  margin: 0 10px 6px 30px;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  max-width: 220px;
+}
+/* Chevron de colapso al lado del ítem de navegación "Tickets" (colapsa el
+   sidebar de bandejas completo). */
+.sidebar-nav-row {
+  display: flex;
+  align-items: center;
+}
+.sidebar-nav-row .sidebar-link { flex: 1; min-width: 0; }
+.sidebar-nav-chevron {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 8px 12px 8px 2px;
+}
+.sidebar-nav-chevron:hover { color: var(--text); }
+
 /* =====================================================================
    Ticket list (acordion) ï¿½ filas compactas y expandibles.
    Diseï¿½o: cada fila es un grid horizontal. En pantallas chicas se apila.

@@ -18,7 +18,10 @@ interface BoxRow {
   sortOrder: number;
   active: boolean;
   moduleKey?: string | null;
+  parentId?: string | null;
   ticketCount?: number;
+  aggregateCount?: number;
+  childrenCount?: number;
   ruleCount?: number;
 }
 
@@ -42,6 +45,7 @@ export default function AdminBoxesPage() {
   const [deactivateTarget, setDeactivateTarget] = useState<BoxRow | null>(null);
   const [fallbackId, setFallbackId] = useState('');
   const [deactivating, setDeactivating] = useState(false);
+  const [moveFor, setMoveFor] = useState<string | null>(null);
 
   function load() {
     api
@@ -113,6 +117,19 @@ export default function AdminBoxesPage() {
     }
   }
 
+  async function moveBox(target: BoxRow, parentId: string | null) {
+    setMoveFor(null);
+    setError('');
+    try {
+      await api.patch(`/ticket-groups/${target.id}/move`, { parentId });
+      setNotice(`Box "${target.name}" movido`);
+      setTimeout(() => setNotice(''), 2500);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function confirmDeactivate() {
     if (!deactivateTarget) return;
     if (!fallbackId) {
@@ -142,6 +159,27 @@ export default function AdminBoxesPage() {
       setDeactivating(false);
     }
   }
+
+  // Árbol de contenedores (para ofrecer destinos válidos y evitar ciclos al mover).
+  const byParent = new Map<string, BoxRow[]>();
+  for (const b of boxes) {
+    if (b.parentId && boxes.some((x) => x.id === b.parentId)) {
+      const arr = byParent.get(b.parentId) ?? [];
+      arr.push(b);
+      byParent.set(b.parentId, arr);
+    }
+  }
+  const descendants = (id: string): Set<string> => {
+    const out = new Set<string>();
+    const stack = [...(byParent.get(id) ?? [])];
+    while (stack.length) {
+      const c = stack.pop() as BoxRow;
+      out.add(c.id);
+      const kids = byParent.get(c.id);
+      if (kids) stack.push(...kids);
+    }
+    return out;
+  };
 
   return (
     <Shell>
@@ -206,6 +244,7 @@ export default function AdminBoxesPage() {
                 <th>box</th>
                 <th>color</th>
                 <th>orden</th>
+                <th>en contenedor</th>
                 <th>módulo</th>
                 <th>tickets</th>
                 <th>reglas</th>
@@ -223,13 +262,40 @@ export default function AdminBoxesPage() {
                   <td className="muted" style={{ fontSize: 12 }}>{b.color || '—'}</td>
                   <td>{b.sortOrder}</td>
                   <td className="muted" style={{ fontSize: 12 }}>
+                    {boxes.find((p) => p.id === b.parentId)?.name || '— (nivel superior)'}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
                     {b.moduleKey ? (MODULE_OPTIONS.find((m) => m.key === b.moduleKey)?.label || b.moduleKey) : '—'}
                   </td>
-                  <td>{b.ticketCount ?? 0}</td>
+                  <td>{b.aggregateCount ?? b.ticketCount ?? 0}</td>
                   <td>{b.ruleCount ?? 0}</td>
                   <td><Pill style={b.active ? 'pill-green' : 'pill-gray'}>{b.active ? 'activo' : 'inactivo'}</Pill></td>
                   <td className="text-right">
                     <div className="flex wrap" style={{ justifyContent: 'flex-end' }}>
+                      {moveFor === b.id ? (
+                        <select
+                          className="select"
+                          style={{ fontSize: 12, padding: 2, maxWidth: 200 }}
+                          autoFocus
+                          value=""
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '') return;
+                            void moveBox(b, v === '__root__' ? null : v);
+                          }}
+                          onBlur={() => setMoveFor(null)}
+                        >
+                          <option value="">mover a…</option>
+                          {b.parentId !== null && <option value="__root__">Nivel superior (sin contenedor)</option>}
+                          {boxes
+                            .filter((d) => d.id !== b.id && !descendants(b.id).has(d.id))
+                            .map((d) => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                        </select>
+                      ) : (
+                        <button className="btn btn-sm" onClick={() => setMoveFor(b.id)}>mover a…</button>
+                      )}
                       <button className="btn btn-sm" onClick={() => openEdit(b)}>editar</button>
                       {b.active ? (
                         <button className="btn btn-sm btn-danger" onClick={() => openDeactivate(b)}>desactivar</button>

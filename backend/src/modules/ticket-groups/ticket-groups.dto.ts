@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class CreateTicketGroupDto {
   @IsString()
@@ -60,4 +60,14 @@ export class DeactivateTicketGroupDto {
   @IsOptional()
   @IsUUID()
   fallbackGroupId?: string | null;
+}
+
+// Mover/promover un box a otro contenedor. `parentId`:
+//   - un UUID válido → mueve el box como hijo de ese contenedor;
+//   - null → promueve el box al nivel superior (sin contenedor);
+//   - ausente → error (no se puede "no tocar" el padre con esta ruta).
+export class MoveTicketGroupDto {
+  @ValidateIf((o) => o.parentId !== null)
+  @IsUUID()
+  parentId: string | null;
 }
