@@ -17,6 +17,7 @@ interface Ticket {
   priority: string;
   slaStatus?: string;
   createdAt: string;
+  lastActivityAt?: string | null;
   source?: string | null;
   customer?: { name: string } | null;
   technician?: { user?: { name?: string } } | null;

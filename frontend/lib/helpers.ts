@@ -39,6 +39,18 @@ export function timeAgo(iso?: string | null): string {
   return `hace ${days} d`;
 }
 
+// Etiqueta de "última actividad" para el listado de tickets: relativa los
+// primeros 7 días ("hace 5 min", "hace 2 h", "hace 3 d"); pasado ese umbral una
+// fecha corta es más útil que un relativo impreciso. Para el dato exacto, el
+// frontend agrega un tooltip con la fecha/hora completa.
+export function lastActivityLabel(iso?: string | null): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return '';
+  if (Date.now() - t >= 7 * 24 * 3600 * 1000) return formatDay(iso);
+  return timeAgo(iso);
+}
+
 // Número de ticket humano-legible: TK-{año}-{número}. El año es el del momento
 // en que el ticket fue creado (created_at); el número es el contador global.
 export function ticketNumberDisplay(t?: { ticketNumber?: number | null; createdAt?: string | null } | null): string {

@@ -365,6 +365,7 @@ export class TicketsService {
       ticketNumber: await this.nextTicketNumber(),
       firstResponseAt: null,
       resolvedAt: null,
+      lastActivityAt: new Date(),
     });
     const saved = await this.tickets.save(ticket);
 
@@ -446,18 +447,13 @@ export class TicketsService {
       }
     }
 
-    await this.tickets.save(t);
-
-    // Refresh SLA & emit domain audit events for meaningful changes.
-    const contract = await this.findActiveContract(t.customerId);
-    const slaResult = await this.refreshSla(t, contract);
-
     // Unify the audit trail: emit ONE value-bearing "update" row carrying the
     // real old/new diff of every field that actually changed (title, category,
     // status, priority, technician, contact, site...). Previously the generic
     // interceptor row logged "update" with null/null and the granular
     // *_change rows duplicated the same info — inconsistent. Now: one complete,
-    // value-bearing entry per edit.
+    // value-bearing entry per edit. El diff se calcula ANTES de salvar: solo un
+    // cambio real cuenta como actividad (bump de lastActivityAt).
     const changed: Record<string, unknown> = {};
     const oldVals: Record<string, unknown> = {};
     if (t.title !== old.title) { changed.title = t.title; oldVals.title = old.title; }
@@ -470,6 +466,13 @@ export class TicketsService {
     }
     if (t.contactId !== old.contactId) { changed.contactId = t.contactId; oldVals.contactId = old.contactId; }
     if (t.siteId !== old.siteId) { changed.siteId = t.siteId; oldVals.siteId = old.siteId; }
+
+    if (Object.keys(changed).length > 0) t.lastActivityAt = new Date();
+    await this.tickets.save(t);
+
+    // Refresh SLA & emit domain audit events for meaningful changes.
+    const contract = await this.findActiveContract(t.customerId);
+    const slaResult = await this.refreshSla(t, contract);
 
     if (Object.keys(changed).length > 0) {
       await this.audit.log({
@@ -544,6 +547,7 @@ export class TicketsService {
     const prior = t.technicianId;
     t.technicianId = dto.technicianId;
     if (t.status === TicketStatus.NUEVO) t.status = TicketStatus.ASIGNADO;
+    t.lastActivityAt = new Date();
     await this.tickets.save(t);
 
     await this.audit.log({
@@ -575,6 +579,7 @@ export class TicketsService {
       if (ticket.legacyGroup === group.name) continue;
       const oldGroup = ticket.legacyGroup;
       ticket.legacyGroup = group.name;
+      ticket.lastActivityAt = new Date();
       await this.tickets.save(ticket);
       await this.audit.log({
         user: actor,
@@ -644,6 +649,7 @@ export class TicketsService {
       } else {
         ticket.resolvedAt = null;
       }
+      ticket.lastActivityAt = new Date();
       await this.tickets.save(ticket);
       await this.audit.log({
         user: actor,
@@ -678,6 +684,11 @@ export class TicketsService {
       fromEmail: dto.fromEmail ?? null,
     });
     const saved = await this.messages.save(message);
+
+    // Cualquier mensaje en el hilo (respuesta de staff, nota interna, etc.) es
+    // actividad: refresca lastActivityAt para el "hace cuánto" del listado.
+    t.lastActivityAt = new Date();
+    await this.tickets.save(t);
 
     // First response: first non-system, internal (tech/portal) message.
     if (
@@ -951,6 +962,7 @@ export class TicketsService {
         const prevStatus = closed.status;
         closed.status = TicketStatus.ABIERTO;
         closed.resolvedAt = null;
+        closed.lastActivityAt = new Date();
         await this.tickets.save(closed);
         const contract = await this.findActiveContract(closed.customerId);
         await this.refreshSla(closed, contract);
@@ -984,6 +996,8 @@ export class TicketsService {
           fromEmail: data.fromEmail,
         }),
       );
+      existing.lastActivityAt = new Date();
+      await this.tickets.save(existing);
       await this.saveAttachments(msg.id, data.attachments);
       await this.ensurePortalEnabled(data.contactId);
       await this.emitClientReplyBroadcast(
@@ -1010,6 +1024,7 @@ export class TicketsService {
         ticketNumber: await this.nextTicketNumber(),
         firstResponseAt: null,
         resolvedAt: null,
+        lastActivityAt: new Date(),
       }),
     );
     const msg = await this.messages.save(
@@ -1089,6 +1104,11 @@ export class TicketsService {
         );
         await this.saveAttachments(saved.id, m.attachments);
       }
+      // El hilo recibió mensajes (cliente, bot o técnico): es actividad real.
+      if (data.messages.length) {
+        open.lastActivityAt = new Date();
+        await this.tickets.save(open);
+      }
       // Solo si hay un mensaje de ORIGEN CLIENTE (no del bot): es la respuesta a
       // una conversación ya abierta → evento de socket ticket:client-reply.
       const clientMsg = data.messages.find((m) => m.author === 'cliente');
@@ -1114,6 +1134,7 @@ export class TicketsService {
         ticketNumber: await this.nextTicketNumber(),
         firstResponseAt: null,
         resolvedAt: null,
+        lastActivityAt: new Date(),
       }),
     );
     for (const m of data.messages) {

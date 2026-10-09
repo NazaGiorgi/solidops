@@ -114,6 +114,15 @@ export class Ticket extends SoftDeleteEntity {
   @Column({ name: 'resolved_at', type: 'timestamptz', nullable: true })
   resolvedAt: Date | null;
 
+  // Última actividad relevante del ticket: mensaje nuevo (staff/cliente, por
+  // email, WhatsApp o portal), cambio de estado, asignación o movimiento de box.
+  // A diferencia de `updatedAt` (que TypeORM solo pisa cuando se RE-guarda la fila
+  // del ticket, cosa que NO ocurre al recibir un mensaje de cliente sobre un hilo
+  // abierto), este campo se actualiza EXPLÍCITAMENTE en cada evento de actividad.
+  // Alimenta el "hace cuánto" de cada fila en el listado.
+  @Column({ name: 'last_activity_at', type: 'timestamptz', nullable: true })
+  lastActivityAt: Date | null;
+
   // --- Ticket merging (P3) ---
   // If this ticket was merged, `merged_into_id` points to the principal ticket.
   // The principal has `merged_into_id = null`.

@@ -9,7 +9,8 @@ import {
   PRIORITY_PILLS,
   PRIORITY_LABELS,
   SLA_PILLS,
-  timeAgo,
+  lastActivityLabel,
+  formatDate,
   ticketNumberDisplay,
   sourceIcon,
   sourceLabel,
@@ -26,6 +27,7 @@ export interface TicketListItem {
   priority: string;
   slaStatus?: string | null;
   createdAt: string;
+  lastActivityAt?: string | null;
   ticketNumber?: number | null;
   source?: string | null;
   customer?: { name?: string } | null;
@@ -102,6 +104,15 @@ export function TicketList({
 
   const titleVar = { ['--ticket-title-w' as string]: `${titleW}px` } as CSSProperties;
 
+  // Tick cada 30s: fuerza un re-render para que los valores relativos
+  // ("hace 2 min") avancen solos mientras la pantalla está abierta, sin
+  // necesidad de recargar la lista.
+  const [, setNow] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNow((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <div className="ticket-list" role="list" style={titleVar}>
       {tickets.map((t) => {
@@ -143,7 +154,12 @@ export function TicketList({
                 {STATUS_LABELS[t.status] || t.status}
               </Pill>
             </span>
-            <span className="ticket-cell ticket-cell-time">{timeAgo(t.createdAt)}</span>
+            <span
+              className="ticket-cell ticket-cell-time"
+              title={formatDate(t.lastActivityAt ?? t.createdAt)}
+            >
+              {lastActivityLabel(t.lastActivityAt ?? t.createdAt)}
+            </span>
             <span className="ticket-cell ticket-cell-title">
               <span className="ticket-cell-source" title={sourceLabel(t.source)}>{sourceIcon(t.source)}</span>
               {ticketNumberDisplay(t) && (
