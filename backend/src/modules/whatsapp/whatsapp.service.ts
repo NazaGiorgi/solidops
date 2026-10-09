@@ -14,6 +14,7 @@ import { TicketsService } from '../tickets/tickets.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isWorkingTime, BusinessHours } from '../../common/utils/business-hours.util';
 import { TicketChannel, TicketStatus, TicketPriority, TicketAuthorType, NotificationType } from '../../common/enums';
+import { isAllowedAttachmentMime, hasForbiddenExtension } from '../../common/utils/allowed-attachment-mimes';
 import { StorageService } from '../../storage/storage.service';
 
 // Menú de bienvenida del bot de WhatsApp.
@@ -69,6 +70,15 @@ const WA_MEDIA_EXT: Record<string, string> = {
   'image/webp': 'webp',
   'image/bmp': 'bmp',
   'image/svg+xml': 'svg',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'text/plain': 'txt',
+  'text/csv': 'csv',
 };
 
 // Opciones del menú → categoría interna, box y prioridad. La categoría es lo que
@@ -191,7 +201,8 @@ export class WhatsappService {
     }
     const text = String(msg?.text?.body || '').trim();
     const imageMedia = this.extractImageMedia(msg);
-    if (!text && !imageMedia) {
+    const documentMedia = this.extractDocumentMedia(msg);
+    if (!text && !imageMedia && !documentMedia) {
       this.logger.warn(`[WA] Mensaje de ${from} con tipo no soportado (${msg?.type ?? 'sin tipo'}), se ignora`);
       return;
     }
@@ -206,6 +217,12 @@ export class WhatsappService {
     // Imagen recibida: se adjunta al ticket abierto (o se informa si no hay hilo).
     if (imageMedia) {
       await this.handleImageMessage(contact, open, imageMedia);
+      return;
+    }
+
+    // Documento recibido (PDF, Word, Excel, PowerPoint, TXT o CSV).
+    if (documentMedia) {
+      await this.handleDocumentMessage(contact, open, documentMedia);
       return;
     }
 
@@ -309,9 +326,97 @@ export class WhatsappService {
     }
   }
 
+  // --- Documentos recibidos por WhatsApp ---------------------------------------
+// Un mensaje `document` cuyo mime NO sea imagen (los documentos-imagen los toma
+// extractImageMedia como imágenes). Se procesan contra la misma allowlist que la
+// UI (staff/portal); los formatos no soportados se descartan con un log claro.
+private extractDocumentMedia(msg: any): { id: string; mimeType: string; filename: string; caption?: string } | null {
+    if (msg?.type === 'document' && msg?.document?.id) {
+      const mimeType = String(msg.document.mime_type || '').toLowerCase();
+      if (mimeType.startsWith('image/')) return null;
+      return {
+        id: String(msg.document.id),
+        mimeType,
+        filename: String(msg.document.filename || 'documento'),
+        caption: msg.document.caption,
+      };
+    }
+    return null;
+  }
+
+  // Descarga el documento real (usa el nombre del archivador), valida contra la
+  // allowlist ANTES de bajar bytes (el mime/filename ya viene en el payload) y lo
+  // adjunta al ticket abierto igual que una imagen.
+  private async handleDocumentMessage(contact: Contact, open: Ticket | null, media: { id: string; mimeType: string; filename: string; caption?: string }): Promise<void> {
+    if (!open) {
+      this.logger.warn(`[WA] Documento de ${contact.whatsapp} sin ticket abierto; no hay hilo al cual adjuntarlo`);
+      return;
+    }
+    if (!contact.customerId) {
+      this.logger.warn(`[WA] Contacto ${contact.id} sin empresa; documento no asociado a ticket`);
+      return;
+    }
+    const filename = this.safeWhatsappFilename(media.filename);
+    if (!isAllowedAttachmentMime(media.mimeType, filename) || hasForbiddenExtension(filename)) {
+      // Descartar con rastro claro en logs: no expone nada al cliente ni se rompe
+      // el flujo, pero queda la evidencia por qué no se adjuntó.
+      this.logger.warn(
+        `[WA] Documento rechazado del contacto ${contact.id} (${contact.whatsapp}): tipo=${media.mimeType || 'sin tipo'} nombre=«${filename}» (formato no permitido)`,
+      );
+      return;
+    }
+    const body = String(media.caption || '').trim() || `Documento adjunto (WhatsApp) — ${filename}`;
+    try {
+      const { buffer, filename: savedName, mimeType } = await this.downloadWhatsAppMedia(media.id, media.mimeType, filename);
+      if (buffer.length > WHATSAPP_MEDIA_MAX_BYTES) {
+        throw new Error(
+          `el documento excede el límite de ${Math.round(WHATSAPP_MEDIA_MAX_BYTES / 1024 / 1024)} MB (${buffer.length} bytes)`,
+        );
+      }
+      const { url } = await this.storage.putObject(buffer, savedName, mimeType, 'tickets');
+      const res = await this.tickets.upsertFromWhatsapp({
+        contactId: contact.id,
+        customerId: contact.customerId,
+        title: open.title,
+        messages: [
+          {
+            author: 'cliente',
+            body,
+            attachments: [{ filename: savedName, url, mimeType, sizeBytes: buffer.length }],
+          },
+        ],
+      });
+      this.logger.log(`[WA] Documento ${savedName} adjuntado al ticket ${res.ticket.id} (${buffer.length} bytes)`);
+      await this.notifyWhatsappMessage(res.ticket, contact.name);
+    } catch (e) {
+      this.logger.error(`[WA] Fallo adjuntando documento del contacto ${contact.id} al ticket ${open.id}: ${(e as Error).message}`);
+      try {
+        await this.tickets.upsertFromWhatsapp({
+          contactId: contact.id,
+          customerId: contact.customerId,
+          title: open.title,
+          messages: [
+            {
+              author: 'bot',
+              body: `⚠ No se pudo guardar el documento que envió el cliente por WhatsApp: ${(e as Error).message}`,
+            },
+          ],
+        });
+      } catch (e2) {
+        this.logger.error(`[WA] Fallo registrando aviso de documento en ticket ${open.id}: ${(e2 as Error).message}`);
+      }
+    }
+  }
+
   // 1) GET {media-id} de la Graph API → URL temporal de descarga (+mime).
-  // 2) GET esa URL con el access token en el header → bytes de la imagen.
-  private async downloadWhatsAppMedia(mediaId: string): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+  // 2) GET esa URL con el access token en el header → bytes del archivo.
+  // Para documentos se pasa el nombre del remitente (preferredFilename) y el mime
+  // declarado en el payload como fallback; para imágenes se genera nombre propio.
+  private async downloadWhatsAppMedia(
+    mediaId: string,
+    mimeHint = '',
+    preferredFilename = '',
+  ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
     const token = this.config.get<string>('whatsapp.accessToken');
     if (!token) throw new Error('WHATSAPP_ACCESS_TOKEN no configurado');
 
@@ -329,10 +434,23 @@ export class WhatsappService {
     if (!dlRes.ok) throw new Error(`Descarga de media HTTP ${dlRes.status}`);
 
     const buffer = Buffer.from(await dlRes.arrayBuffer());
-    const mimeType = info.mime_type || 'image/jpeg';
-    const ext = WA_MEDIA_EXT[mimeType] || 'img';
-    const filename = `whatsapp-${Date.now()}.${ext}`;
+    const mimeType = info.mime_type || mimeHint || 'application/octet-stream';
+    let filename: string;
+    if (preferredFilename) {
+      filename = this.safeWhatsappFilename(preferredFilename);
+    } else {
+      const ext = WA_MEDIA_EXT[mimeType] || 'img';
+      filename = `whatsapp-${Date.now()}.${ext}`;
+    }
     return { buffer, filename, mimeType };
+  }
+
+  // Neutraliza el nombre de archivo que manda WhatsApp (evita rutas/inyección de
+  // path en el storage y en el registro del ticket).
+  private safeWhatsappFilename(name: string): string {
+    const base = String(name || '').replace(/\\/g, '/').split('/').pop() || '';
+    const cleaned = base.replace(/[^\w.\-()[\] ]/g, '_').trim();
+    return cleaned || 'documento';
   }
 
   // --- Chatbot (primer contacto, sin ticket abierto) -------------------------
