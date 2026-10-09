@@ -14,11 +14,19 @@ import { RateLimitService } from '../../common/auth/rate-limit.service';
 import { MailService } from '../mail/mail.service';
 import { Ticket } from '../../entities/ticket.entity';
 import { TicketMessage } from '../../entities/ticket-message.entity';
+import { TicketAttachment } from '../../entities/ticket-attachment.entity';
+import { StorageService } from '../../storage/storage.service';
 import { AuditAction, AuditEntityType, TicketStatus, TicketPriority, TicketAuthorType, TicketChannel } from '../../common/enums';
 import { AuditService } from '../audit/audit.service';
 import { PortalTokenPayload } from './portal.guard';
 import { normalizeSubjectKey } from '../../common/utils/subject-key.util';
 import { extractEmailDomain, isPersonalEmailDomain } from '../../common/utils/email-domain';
+import {
+  isAllowedAttachmentMime,
+  hasForbiddenExtension,
+  ALLOWED_ATTACHMENT_LABEL,
+  ATTACHMENT_MAX_BYTES,
+} from '../../common/utils/allowed-attachment-mimes';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { WorkshopService } from '../workshop/workshop.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
@@ -44,8 +52,10 @@ export class PortalService {
     @InjectRepository(CustomerDomain) private readonly customerDomains: Repository<CustomerDomain>,
     @InjectRepository(Ticket) private readonly tickets: Repository<Ticket>,
     @InjectRepository(TicketMessage) private readonly messages: Repository<TicketMessage>,
+    @InjectRepository(TicketAttachment) private readonly attachments: Repository<TicketAttachment>,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly storage: StorageService,
     private readonly resetTokens: PasswordResetService,
     private readonly mail: MailService,
     private readonly rateLimit: RateLimitService,
@@ -192,6 +202,30 @@ export class PortalService {
     return t;
   }
 
+  // Descarga un adjunto de un mensaje de un ticket del cliente del portal.
+  // Verifica la pertenencia (customerId del ticket == customerId del contacto)
+  // ANTES de tocar MinIO, para no exponer adjuntos de otros clientes.
+  async downloadAttachment(
+    attachmentId: string,
+    customerId: string | null,
+  ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+    const att = await this.attachments
+      .createQueryBuilder('a')
+      .innerJoinAndSelect('a.message', 'm')
+      .innerJoinAndSelect('m.ticket', 't')
+      .where('a.id = :id', { id: attachmentId })
+      .getOne();
+    if (!att || !att.fileUrl) throw new NotFoundException('Adjunto no encontrado');
+    if (!customerId || !att.message?.ticket || att.message.ticket.customerId !== customerId) {
+      throw new NotFoundException('Adjunto no encontrado');
+    }
+    const fileUrl = att.fileUrl;
+    const idx = fileUrl.indexOf('/tickets/');
+    const key = idx >= 0 ? fileUrl.slice(idx + 1) : fileUrl;
+    const buffer = await this.storage.getObject(key);
+    return { buffer, filename: att.filename, mimeType: att.mimeType };
+  }
+
   async createTicket(
     customerId: string | null,
     contactId: string,
@@ -214,6 +248,7 @@ export class PortalService {
       shadow: false,
       firstResponseAt: null,
       resolvedAt: null,
+      lastActivityAt: new Date(),
     });
     const saved = await this.tickets.save(ticket);
     await this.messages.save(
@@ -239,8 +274,67 @@ export class PortalService {
       body,
     });
     await this.messages.save(message);
+    t.lastActivityAt = new Date();
+    await this.tickets.save(t);
     await this.emitPortalTicketEvent(t, 'ticket:client-reply', body);
-    return this.getTicket(ticketId, customerId);
+    // Devuelve el mensaje guardado (no el ticket completo) para que el frontend
+    // del portal pueda colgarle adjuntos tras crearlo (mismo patrón que staff).
+    return message;
+  }
+
+  // Sube un adjunto a un mensaje del cliente en el portal. Valida ownership (el
+  // mensaje debe pertenecer a un ticket del cliente del contacto y estar firmado
+  // por el cliente) y reusa la misma allowlist + tope de tamaño que el staff.
+  async uploadAttachment(
+    messageId: string,
+    file?: Express.Multer.File,
+    customerId?: string | null,
+  ): Promise<TicketAttachment> {
+    if (!file || !file.buffer) {
+      throw new BadRequestException('Elegí un archivo para adjuntar');
+    }
+    const mime = (file.mimetype || '').toLowerCase();
+    const filename = this.safeAttachmentName(file.originalname);
+    if (hasForbiddenExtension(filename)) {
+      throw new BadRequestException(
+        `No se puede adjuntar «${filename}»: los archivos ejecutables y de sistema están bloqueados.`,
+      );
+    }
+    if (!isAllowedAttachmentMime(mime, filename)) {
+      throw new BadRequestException(
+        `Formato no permitido (${mime || 'sin tipo'}). Podés adjuntar ${ALLOWED_ATTACHMENT_LABEL}.`,
+      );
+    }
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      throw new BadRequestException(
+        `El archivo supera el tamaño máximo de ${Math.round(ATTACHMENT_MAX_BYTES / 1024 / 1024)} MB (${file.size} bytes).`,
+      );
+    }
+    const message = await this.messages.findOne({
+      where: { id: messageId },
+      relations: ['ticket'],
+    });
+    if (!message || !message.ticket || message.ticket.customerId !== customerId) {
+      throw new NotFoundException('Mensaje no encontrado');
+    }
+    if (message.authorType !== TicketAuthorType.CLIENTE) {
+      throw new BadRequestException('Solo podés adjuntar archivos a tus propios mensajes');
+    }
+    const { url } = await this.storage.putObject(file.buffer, filename, mime, 'tickets');
+    const attachment = this.attachments.create({
+      ticketMessageId: messageId,
+      fileUrl: url,
+      filename,
+      mimeType: mime,
+      sizeBytes: file.size,
+    });
+    return this.attachments.save(attachment);
+  }
+
+  private safeAttachmentName(name: string): string {
+    const base = String(name || '').replace(/\\/g, '/').split('/').pop() || '';
+    const cleaned = base.replace(/[^\w.\-()[\] ]/g, '_').trim();
+    return cleaned || 'adjunto';
   }
 
   // Broadcast efímero por Socket.IO para eventos de ticket originados en el

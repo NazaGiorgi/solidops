@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api, ApiError, getToken, API_URL } from '../../../../lib/api';
@@ -91,6 +91,24 @@ interface CustOption {
   contacts?: Array<{ id: string; name?: string | null; email?: string | null }>;
 }
 
+// Imagen pendiente de adjuntar al responder un ticket. Se sube recién cuando
+// existe el mensaje (primero se crea el mensaje, luego se cuelgan los archivos).
+interface PendingFile {
+  key: string;
+  file: File;
+  kind: 'image' | 'doc';
+  preview?: string;
+}
+
+import {
+  MAX_ATTACH_BYTES,
+  ALLOWED_ATTACHMENTS_LABEL,
+  isAllowedAttachFile,
+  attachKind,
+  attachIcon,
+  formatSize,
+} from '../../../../lib/attach-files';
+
 export default function TicketDetail({ params }: { params: { id: string } }) {
   const router = useRouter();
   const { user, hasPerm } = useAuth();
@@ -101,6 +119,10 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
+  // Imágenes elegidas para adjuntar en la respuesta (se muestran como fichas
+  // con preview hasta que "responder" crea el mensaje y las sube una por una).
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // P3 merge state
   const [mergeCandidates, setMergeCandidates] = useState<Array<{ id: string; title: string; status: string }>>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -325,18 +347,76 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
     }
   }
 
+  // Validación del lado del cliente para avisar alto y claro antes de crear el
+  // mensaje. El backend revalida (typo y tamaño) por si llegara algo por otra vía.
+  function onPickFiles(e: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    const added: PendingFile[] = [];
+    for (const f of files) {
+      if (!isAllowedAttachFile(f)) {
+        setError(`«${f.name}» tiene un formato no permitido. Podés adjuntar ${ALLOWED_ATTACHMENTS_LABEL}.`);
+        continue;
+      }
+      if (f.size > MAX_ATTACH_BYTES) {
+        setError(`«${f.name}» supera el tamaño máximo de ${Math.round(MAX_ATTACH_BYTES / 1024 / 1024)} MB.`);
+        continue;
+      }
+      const kind = attachKind(f);
+      added.push({
+        key: `${f.name}-${f.lastModified}-${Math.random().toString(36).slice(2)}`,
+        file: f,
+        kind,
+        preview: kind === 'image' ? URL.createObjectURL(f) : undefined,
+      });
+    }
+    if (added.length > 0) setPendingFiles((prev) => [...prev, ...added]);
+    e.target.value = '';
+  }
+
+  function removePending(key: string) {
+    setPendingFiles((prev) => {
+      const item = prev.find((p) => p.key === key);
+      if (item?.preview) URL.revokeObjectURL(item.preview);
+      return prev.filter((p) => p.key !== key);
+    });
+  }
+
+  // Responde internamente: primero crea el mensaje (puede ser solo con adjuntos,
+  // sin texto) y después sube cada imagen pendiente al mensaje recién creado.
   async function sendMessage() {
-    if (!body.trim()) return;
+    const text = body.trim();
+    if (!text && pendingFiles.length === 0) return;
     setBusy(true);
     setError('');
     try {
-      await api.post(`/tickets/${params.id}/messages`, {
+      const saved = await api.post<{ id: string }>(`/tickets/${params.id}/messages`, {
         channel: 'portal',
         authorType: 'tecnico',
-        body,
+        body: text,
       });
-      await load();
+      const remaining: PendingFile[] = [];
+      for (const p of pendingFiles) {
+        try {
+          const fd = new FormData();
+          fd.append('file', p.file);
+          await api.upload(`/tickets/messages/${saved.id}/attachments`, fd);
+        } catch {
+          remaining.push(p);
+        }
+      }
+      if (remaining.length > 0) {
+        setPendingFiles(remaining);
+        setError(
+          `No se pudieron adjuntar ${remaining.length} imagen(es): ${remaining.map((r) => r.file.name).join(', ')}. El mensaje se guardó igual.`,
+        );
+      } else {
+        pendingFiles.forEach((p) => {
+          if (p.preview) URL.revokeObjectURL(p.preview);
+        });
+        setPendingFiles([]);
+      }
       setBody('');
+      await load();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -919,8 +999,73 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
             onChange={(e) => setBody(e.target.value)}
           />
         </div>
+        <div className="mt-8 flex wrap" style={{ gap: 8, alignItems: 'center' }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+            multiple
+            style={{ display: 'none' }}
+            onChange={onPickFiles}
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+          >
+            📎 adjuntar archivo
+          </button>
+          <span className="muted" style={{ fontSize: 12 }}>
+            imágenes, PDF, Word, Excel, PowerPoint, TXT y CSV… hasta 25 MB
+          </span>
+        </div>
+        {pendingFiles.length > 0 && (
+          <div className="flex wrap mt-8" style={{ gap: 8 }}>
+            {pendingFiles.map((p) => (
+              <div
+                key={p.key}
+                className="flex"
+                style={{ gap: 6, alignItems: 'center', padding: 4, border: '1px solid var(--border, #3a3a3a)', borderRadius: 8 }}
+              >
+                {p.kind === 'image' && p.preview ? (
+                  <img
+                    src={p.preview}
+                    alt={p.file.name}
+                    style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 4 }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 17, lineHeight: 1 }} title="documento">
+                    {attachIcon(p.file)}
+                  </span>
+                )}
+                <span
+                  title={p.file.name}
+                  style={{ fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {p.file.name}
+                </span>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {formatSize(p.file.size)}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => removePending(p.key)}
+                  title="quitar archivo"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="mt-8 text-right">
-          <button className="btn btn-primary" onClick={sendMessage} disabled={busy || !body.trim()}>
+          <button
+            className="btn btn-primary"
+            onClick={sendMessage}
+            disabled={busy || (!body.trim() && pendingFiles.length === 0)}
+          >
             responder
           </button>
         </div>

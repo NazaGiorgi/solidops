@@ -42,6 +42,12 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { normalizeSubjectKey } from '../../common/utils/subject-key.util';
 import { publicTicketNumber } from '../../common/utils/ticket-number.util';
+import {
+  isAllowedAttachmentMime,
+  hasForbiddenExtension,
+  ALLOWED_ATTACHMENT_LABEL,
+  ATTACHMENT_MAX_BYTES,
+} from '../../common/utils/allowed-attachment-mimes';
 
 @Injectable()
 export class TicketsService {
@@ -781,25 +787,53 @@ export class TicketsService {
 
   async uploadAttachment(
     messageId: string,
-    file: Express.Multer.File,
+    file?: Express.Multer.File,
   ): Promise<TicketAttachment> {
+    if (!file || !file.buffer) {
+      throw new BadRequestException('Elegí un archivo para adjuntar');
+    }
+    const mime = (file.mimetype || '').toLowerCase();
+    const filename = this.safeAttachmentName(file.originalname);
+    if (hasForbiddenExtension(filename)) {
+      throw new BadRequestException(
+        `No se puede adjuntar «${filename}»: los archivos ejecutables y de sistema están bloqueados.`,
+      );
+    }
+    if (!isAllowedAttachmentMime(mime, filename)) {
+      throw new BadRequestException(
+        `Formato no permitido (${mime || 'sin tipo'}). Podés adjuntar ${ALLOWED_ATTACHMENT_LABEL}.`,
+      );
+    }
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      throw new BadRequestException(
+        `El archivo supera el tamaño máximo de ${Math.round(ATTACHMENT_MAX_BYTES / 1024 / 1024)} MB (${file.size} bytes).`,
+      );
+    }
     const msg = await this.messages.findOne({ where: { id: messageId } });
     if (!msg) throw new NotFoundException('Mensaje no encontrado');
     const { url, key } = await this.storage.putObject(
       file.buffer,
-      file.originalname,
-      file.mimetype,
+      filename,
+      mime,
       'tickets',
     );
     const attachment = this.attachments.create({
       ticketMessageId: messageId,
       fileUrl: url,
-      filename: file.originalname,
-      mimeType: file.mimetype,
+      filename,
+      mimeType: mime,
       sizeBytes: file.size,
     });
     void key;
     return this.attachments.save(attachment);
+  }
+
+  private safeAttachmentName(name: string): string {
+    // Algunos navegadores mandan la ruta completa en originalname; quedamos con
+    // el último tramo para que no entre un separador de path en la clave de MinIO.
+    const base = String(name || '').replace(/\\/g, '/').split('/').pop() || '';
+    const cleaned = base.replace(/[^\w.\-()[\] ]/g, '_').trim();
+    return cleaned || 'adjunto';
   }
 
   // Descarga un adjunto asociado a un mensaje del ticket, servido por el backend

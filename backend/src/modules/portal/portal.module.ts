@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Contact } from '../../entities/contact.entity';
 import { Ticket } from '../../entities/ticket.entity';
 import { TicketMessage } from '../../entities/ticket-message.entity';
+import { TicketAttachment } from '../../entities/ticket-attachment.entity';
 import { Customer } from '../../entities/customer.entity';
 import { CustomerDomain } from '../../entities/customer-domain.entity';
 import { PasswordResetToken } from '../../entities/password-reset-token.entity';
@@ -19,7 +20,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Contact, Ticket, TicketMessage, Customer, CustomerDomain, PasswordResetToken]),
+    TypeOrmModule.forFeature([Contact, Ticket, TicketMessage, TicketAttachment, Customer, CustomerDomain, PasswordResetToken]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

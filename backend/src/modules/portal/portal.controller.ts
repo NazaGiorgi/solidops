@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UploadedFile, UseGuards, Req, Res } from '@nestjs/common';
 import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
-import { Request } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { UseInterceptors } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { PortalService } from './portal.service';
 import { PortalGuard } from './portal.guard';
 import { CurrentPortalContact, PortalContact } from './portal-contact.decorator';
@@ -164,6 +166,47 @@ export class PortalController {
     @CurrentPortalContact() contact: PortalContact,
   ) {
     return this.service.addMessage(id, contact.customerId, dto.body);
+  }
+
+  // Subida de adjuntos del cliente portal. Reusa la misma allowlist/tope que el
+  // staff; el service valida ownership (mensaje de un ticket de su empresa).
+  @Public()
+  @Post('tickets/messages/:messageId/attachments')
+  @UseGuards(PortalGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  uploadAttachment(
+    @Param('messageId') messageId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentPortalContact() contact: PortalContact,
+  ) {
+    return this.service.uploadAttachment(messageId, file, contact.customerId);
+  }
+
+  // Descarga de adjuntos: verifica en el service que el adjunto pertenezca a un
+  // ticket del cliente del portal (ticket.customer_id == contacto.customer_id).
+  @Public()
+  @Get('tickets/attachments/:id/download')
+  @UseGuards(PortalGuard)
+  async downloadAttachment(
+    @Param('id') id: string,
+    @CurrentPortalContact() contact: PortalContact,
+    @Res() res: Response,
+  ) {
+    try {
+      const { buffer, filename, mimeType } = await this.service.downloadAttachment(
+        id,
+        contact.customerId,
+      );
+      res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="${encodeURIComponent(filename || 'adjunto')}"`,
+      );
+      res.setHeader('Content-Length', buffer.length);
+      res.send(buffer);
+    } catch {
+      res.status(404).json({ message: 'Adjunto no encontrado', ok: false });
+    }
   }
 
   // --- Presupuestos de taller (portal) --------------------------------------
