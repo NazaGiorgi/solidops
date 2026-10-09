@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsIn,
   IsInt,
@@ -134,6 +135,14 @@ export class AddMessageDto {
   @IsOptional()
   @IsString()
   fromEmail?: string;
+
+  // Cuando es `false`, el mensaje se guarda SIN despachar el envío saliente
+  // (WhatsApp/email). El frontend usa el endpoint /messages/:messageId/dispatch
+  // después de subir los adjuntos, para que el envío incluya los archivos.
+  // Default `true` = comportamiento histórico (envío en la creación).
+  @IsOptional()
+  @IsBoolean()
+  dispatch?: boolean;
 }
 
 export class ListTicketsQuery {

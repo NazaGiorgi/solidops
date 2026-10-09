@@ -54,6 +54,7 @@ interface EnvConfig {
     phoneNumberId: string;
     verifyToken: string;
     appSecret: string;
+    graphBaseUrl: string;
   };
   // Shared secret required by the (public) inbound-email webhook endpoint. The
   // real ingestion path (IMAP worker) calls EmailService.ingest() in-process and
@@ -129,6 +130,7 @@ export default (): EnvConfig => {
       phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
       verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
       appSecret: process.env.WHATSAPP_APP_SECRET || '',
+      graphBaseUrl: process.env.WHATSAPP_GRAPH_BASE_URL || 'https://graph.facebook.com',
     },
     // Requested via the `X-Inbound-Secret` header. Empty -> the endpoint always
     // rejects (secure-by-default: no secret configured, no access).

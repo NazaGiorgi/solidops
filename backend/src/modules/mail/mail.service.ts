@@ -14,6 +14,11 @@ import { WorkshopEquipmentStatus } from '../../common/enums';
 export class MailService {
   private readonly logger = new Logger(MailService.name);
 
+  // Tope combinado de adjuntos por envío (respuesta de ticket con archivos).
+  // Meta permite hasta 100 MB por documento; acá el límite es conservador: si
+  // se excede, se adjunta greedy hasta el tope y el resto se reporta.
+  private static readonly EMAIL_ATTACHMENTS_MAX_BYTES = 20 * 1024 * 1024;
+
   constructor(
     private readonly mailboxes: MailboxesService,
     @InjectRepository(SystemSettings)
@@ -277,8 +282,14 @@ const signatureText = '\n\nSaludos,\nSolido Connecting Solutions\nServicios de I
   // auto-respuesta. Asunto con prefijo "Re:" para enhebrar en el cliente.
   async sendTicketReply(
     to: string,
-    opts: { ticketNumber: string; subject: string; body: string; technicianName?: string | null },
-  ): Promise<void> {
+    opts: {
+      ticketNumber: string;
+      subject: string;
+      body: string;
+      technicianName?: string | null;
+      attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+    },
+  ): Promise<{ skipped: Array<{ filename: string; reason: string }> }> {
     const subject = /^re:/i.test(opts.subject) ? opts.subject : `Re: ${opts.subject}`;
     const byTech = opts.technicianName
       ? `Respuesta de ${opts.technicianName} de Soporte — Solido Connecting Solutions`
@@ -302,7 +313,25 @@ const signatureText = '\n\nSaludos,\nSolido Connecting Solutions\nServicios de I
       `${byTech}</p>` +
       `<p style="font-size:0.85em; color:#666;">Para continuar la conversación, respondé a este correo — se suma directo al ticket.` +
       `<br/>SolidoCS, lo hacemos simple.</p>`;
-    await this.send(to, subject, text, html, 'Respuesta de ticket');
+    // Adjuntos greedy hasta el tope combinado; los que no entran se devuelven
+    // para que el caller agregue un aviso de sistema en el ticket.
+    const skipped: Array<{ filename: string; reason: string }> = [];
+    let attachments: Array<{ filename: string; content: Buffer; contentType?: string }> | undefined;
+    if (opts.attachments && opts.attachments.length > 0) {
+      attachments = [];
+      let total = 0;
+      for (const a of opts.attachments) {
+        if (total + a.content.length > MailService.EMAIL_ATTACHMENTS_MAX_BYTES) {
+          skipped.push({ filename: a.filename, reason: 'supera el tope combinado de 20 MB de adjuntos' });
+          continue;
+        }
+        total += a.content.length;
+        attachments.push(a);
+      }
+      if (attachments.length === 0) attachments = undefined;
+    }
+    await this.send(to, subject, text, html, 'Respuesta de ticket', attachments);
+    return { skipped };
   }
 
   // Verifica el toggle global "respuestas automáticas por email".
@@ -368,6 +397,26 @@ const signatureText = '\n\nSaludos,\nSolido Connecting Solutions\nServicios de I
     attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>,
   ): Promise<void> {
     const smtp = await this.mailboxes.getSmtpConfig();
+    // [DEV] Outbox de prueba: cuando MAIL_DEV_OUTBOX apunta a un directorio
+    // (solo desarrollo), en lugar de transportar por SMTP se vuelca el correo
+    // completo (incluidos adjuntos en base64) como JSON. Da al harness de
+    // pruebas visibilidad "real" de lo que se enviaría, sin infraestructura SMTP.
+    const devOutbox = process.env.MAIL_DEV_OUTBOX;
+    if (devOutbox) {
+      const { writeFile, mkdir } = await import('fs/promises');
+      const { join } = await import('path');
+      await mkdir(devOutbox, { recursive: true }).catch(() => undefined);
+      const file = join(devOutbox, `${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+      const att = (attachments || []).map((a) => ({
+        filename: a.filename,
+        contentType: a.contentType ?? 'application/octet-stream',
+        sizeBytes: a.content.length,
+        base64: a.content.toString('base64'),
+      }));
+      await writeFile(file, JSON.stringify({ to, subject, text, html, logTag, attachments: att }));
+      this.logger.log(`[MAIL-DEV-OUTBOX] ${logTag} para ${to} (${subject}): ${att.length} adjuntos`);
+      return;
+    }
     if (!smtp) {
       this.logger.warn(`[NO-SMTP] ${logTag} para ${to}: ${subject}`);
       if (attachments && attachments.length > 0) {

@@ -42,6 +42,7 @@ interface TicketDetail {
   site?: { name: string } | null;
   technician?: { id?: string | null; user?: { name?: string } | null } | null;
   technicianId?: string | null;
+  source?: string;
   shadow?: boolean;
   // Enlace a Taller: presente cuando el ticket está vinculado a un equipo.
   workshop?: { equipmentId: string; contactName?: string | null } | null;
@@ -381,8 +382,11 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
     });
   }
 
-  // Responde internamente: primero crea el mensaje (puede ser solo con adjuntos,
-  // sin texto) y después sube cada imagen pendiente al mensaje recién creado.
+  // Responde internamente: primero crea el mensaje con dispatch:false (puede ser
+  // solo con adjuntos, sin texto) y sube las imágenes pendientes al mensaje
+  // recién creado. Recién cuando todos los archivos están subidos se despacha el
+  // envío saliente (POST dispatch) para que el cliente lo reciba por su canal
+  // (WhatsApp/email) y la respuesta incluya los adjuntos.
   async function sendMessage() {
     const text = body.trim();
     if (!text && pendingFiles.length === 0) return;
@@ -393,6 +397,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
         channel: 'portal',
         authorType: 'tecnico',
         body: text,
+        dispatch: false,
       });
       const remaining: PendingFile[] = [];
       for (const p of pendingFiles) {
@@ -405,16 +410,20 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
         }
       }
       if (remaining.length > 0) {
+        // No se despacha: el mensaje (y los archivos que sí subieron) quedan
+        // guardados. El texto y los archivos pendientes se conservan para que el
+        // staff reintente sin perder el contenido.
         setPendingFiles(remaining);
         setError(
-          `No se pudieron adjuntar ${remaining.length} imagen(es): ${remaining.map((r) => r.file.name).join(', ')}. El mensaje se guardó igual.`,
+          `No se pudieron adjuntar ${remaining.length} archivo(s): ${remaining.map((r) => r.file.name).join(', ')}. El mensaje se guardó igual y no se envió al cliente; reintentá adjuntando los que faltan.`,
         );
-      } else {
-        pendingFiles.forEach((p) => {
-          if (p.preview) URL.revokeObjectURL(p.preview);
-        });
-        setPendingFiles([]);
+        return;
       }
+      await api.post(`/tickets/messages/${saved.id}/dispatch`);
+      pendingFiles.forEach((p) => {
+        if (p.preview) URL.revokeObjectURL(p.preview);
+      });
+      setPendingFiles([]);
       setBody('');
       await load();
     } catch (e) {
@@ -1019,6 +1028,13 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           <span className="muted" style={{ fontSize: 12 }}>
             imágenes, PDF, Word, Excel, PowerPoint, TXT y CSV… hasta 25 MB
           </span>
+          {ticket && (ticket.source === 'whatsapp' || ticket.source === 'email') && (
+            <span className="muted" style={{ fontSize: 12 }}>
+              · los archivos se reenvían al cliente por{' '}
+              {ticket.source === 'whatsapp' ? 'WhatsApp' : 'email'}: WhatsApp admite
+              imágenes (JPG/PNG ≤ 5 MB) y documentos PDF/Office/TXT.
+            </span>
+          )}
         </div>
         {pendingFiles.length > 0 && (
           <div className="flex wrap mt-8" style={{ gap: 8 }}>

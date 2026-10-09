@@ -717,11 +717,12 @@ export class TicketsService {
     });
     void authorUserId;
 
-    // Envío saliente por WhatsApp: si el ticket es de canal WhatsApp y la respuesta
-    // es de un técnico, se intenta mandar real por la Cloud API. Si falla (p.ej.
-    // fuera de la ventana de 24h), se agrega un mensaje de sistema al ticket para
-    // que el técnico lo vea (no fallar en silencio).
-    if (t.source === 'whatsapp' && dto.authorType === TicketAuthorType.TECNICO && t.contactId) {
+    // Envío saliente por WhatsApp/email. `dispatch:false` (usado por el frontend
+    // cuando hay adjuntos) guarda el mensaje sin despachar: el envío se dispara
+    // después con POST /messages/:messageId/dispatch, cuando los archivos ya
+    // están subidos.
+    const dispatch = dto.dispatch !== false;
+    if (dispatch && t.source === 'whatsapp' && dto.authorType === TicketAuthorType.TECNICO && t.contactId) {
       const contact = await this.contacts.findOne({ where: { id: t.contactId } });
       const to = contact?.whatsapp;
       if (to) {
@@ -748,7 +749,7 @@ export class TicketsService {
     // nunca recibía la respuesta por email). Mismo criterio de errores que WhatsApp:
     // si falla, mensaje de sistema visible en el ticket (no fallar en silencio).
     // Se omite en modo sombra (tickets históricos de importación, aislados).
-    if (t.source === 'email' && dto.authorType === TicketAuthorType.TECNICO && !t.shadow && t.contactId) {
+    if (dispatch && t.source === 'email' && dto.authorType === TicketAuthorType.TECNICO && !t.shadow && t.contactId) {
       const contact = await this.contacts.findOne({ where: { id: t.contactId } });
       const lastClientMsg = await this.messages.findOne({
         where: { ticketId: id, authorType: TicketAuthorType.CLIENTE },
@@ -783,6 +784,152 @@ export class TicketsService {
     }
 
     return saved;
+  }
+
+  // Despacha el envío saliente de un mensaje ya creado (con sus adjuntos) al
+  // cliente, según el canal ORIGINAL del ticket (source). Usado por el frontend
+  // tras subir los archivos: crear con dispatch:false + subir + este endpoint.
+  // No lanza por fallos parciales: cada adjunto que falla genera un aviso de
+  // sistema en el ticket y el resto sigue ("no perder el archivo").
+  async dispatchMessage(
+    messageId: string,
+    actor: AuthenticatedUser,
+  ): Promise<{
+    dispatched: boolean;
+    reason?: string;
+    whatsapp?: { textOk: boolean; textError?: string; media: Array<{ filename: string; ok: boolean; error?: string }> };
+    email?: { sent: boolean; skipped: Array<{ filename: string; reason: string }> };
+  }> {
+    const message = await this.messages.findOne({
+      where: { id: messageId },
+      relations: { attachments: true },
+    });
+    if (!message) throw new NotFoundException('Mensaje no encontrado');
+    // Guardia idempotente + de seguridad: solo mensajes de técnico se despachan
+    // (evita re-envíos accidentales de mensajes de sistema o del cliente).
+    if (message.authorType !== TicketAuthorType.TECNICO) {
+      return { dispatched: false, reason: 'no-autor' };
+    }
+    const t = await this.tickets.findOne({ where: { id: message.ticketId } });
+    if (!t) throw new NotFoundException('Ticket no encontrado');
+
+    const attachments = message.attachments || [];
+
+    if (t.source === 'whatsapp' && t.contactId) {
+      const contact = await this.contacts.findOne({ where: { id: t.contactId } });
+      const to = contact?.whatsapp;
+      if (!to) {
+        this.logger.warn(`[WA] Ticket ${t.id} de WhatsApp sin número en el contacto; no se envía respuesta`);
+        return { dispatched: false, reason: 'sin-numero' };
+      }
+      const files: Array<{ filename: string; buffer: Buffer; mimeType: string }> = [];
+      for (const att of attachments) {
+        try {
+          const d = await this.downloadAttachment(att.id);
+          files.push({ filename: att.filename, buffer: d.buffer, mimeType: att.mimeType });
+        } catch (e) {
+          this.logger.error(`[WA] Adjunto «${att.filename}» no disponible en MinIO: ${(e as Error).message}`);
+          await this.systemNote(
+            t.id,
+            TicketChannel.WHATSAPP,
+            `⚠ No se pudo enviar «${att.filename}» por WhatsApp: el archivo no está disponible en el storage. Quedó guardado en el ticket.`,
+          );
+        }
+      }
+      const res = await this.whatsapp.sendOutboundWithAttachments(to, message.body, files);
+      if (!res.text.ok) {
+        this.logger.error(`[WA] Fallo envío de respuesta a ${to}: ${res.text.error}`);
+        await this.systemNote(
+          t.id,
+          TicketChannel.WHATSAPP,
+          `⚠ No se pudo enviar por WhatsApp: ${res.text.error || 'error desconocido'}. Puede requerir una plantilla aprobada (mensaje fuera de la ventana de 24 h).`,
+        );
+      }
+      for (const m of res.media) {
+        if (m.ok) continue;
+        this.logger.error(`[WA] Fallo adjunto «${m.filename}» a ${to}: ${m.error}`);
+        await this.systemNote(
+          t.id,
+          TicketChannel.WHATSAPP,
+          `⚠ No se pudo enviar «${m.filename}» por WhatsApp: ${m.error || 'error desconocido'}. Quedó guardado en el ticket.`,
+        );
+      }
+      return { dispatched: true, whatsapp: { textOk: res.text.ok, textError: res.text.error, media: res.media } };
+    }
+
+    if (t.source === 'email' && !t.shadow && t.contactId) {
+      const contact = await this.contacts.findOne({ where: { id: t.contactId } });
+      const lastClientMsg = await this.messages.findOne({
+        where: { ticketId: t.id, authorType: TicketAuthorType.CLIENTE },
+        order: { createdAt: 'DESC' },
+      });
+      const to = lastClientMsg?.fromEmail || contact?.email;
+      if (!to) {
+        this.logger.warn(`[EMAIL-REPLY] Ticket ${t.id} de email sin dirección en el contacto; no se envía respuesta`);
+        return { dispatched: false, reason: 'sin-email' };
+      }
+      const emailAttachments: Array<{ filename: string; content: Buffer; contentType?: string }> = [];
+      const downloadFailures: string[] = [];
+      for (const att of attachments) {
+        try {
+          const key = this.attachmentObjectKey(att.fileUrl);
+          const buffer = await this.storage.getObject(key);
+          emailAttachments.push({ filename: att.filename, content: buffer, contentType: att.mimeType });
+        } catch (e) {
+          this.logger.error(`[EMAIL-REPLY] Adjunto «${att.filename}» no disponible en MinIO: ${(e as Error).message}`);
+          downloadFailures.push(att.filename);
+        }
+      }
+      const ticketNumber = publicTicketNumber(t.ticketNumber, t.createdAt);
+      try {
+        const { skipped } = await this.mail.sendTicketReply(to, {
+          ticketNumber,
+          subject: t.title,
+          body: message.body,
+          technicianName: actor.name ?? null,
+          attachments: emailAttachments,
+        });
+        this.logger.log(`[EMAIL-REPLY] Respuesta enviada a ${to} (ticket ${t.id})`);
+        for (const f of downloadFailures) {
+          await this.systemNote(
+            t.id,
+            TicketChannel.EMAIL,
+            `⚠ No se pudo adjuntar «${f}» en la respuesta por email: el archivo no está disponible en el storage. Quedó guardado en el ticket.`,
+          );
+        }
+        for (const s of skipped) {
+          await this.systemNote(
+            t.id,
+            TicketChannel.EMAIL,
+            `⚠ No se pudo adjuntar «${s.filename}» en la respuesta por email (${s.reason}). Quedó guardado en el ticket.`,
+          );
+        }
+        return { dispatched: true, email: { sent: true, skipped } };
+      } catch (e) {
+        this.logger.error(`[EMAIL-REPLY] Falló el envío de respuesta a ${to}: ${(e as Error).message}`);
+        await this.systemNote(
+          t.id,
+          TicketChannel.EMAIL,
+          `⚠ No se pudo enviar la respuesta por email al cliente (${to}): ${(e as Error).message}.`,
+        );
+        return { dispatched: true, email: { sent: false, skipped: [] } };
+      }
+    }
+
+    // Portal / otros canales: no hay envío saliente.
+    return { dispatched: false, reason: 'sin-canal-saliente' };
+  }
+
+  private async systemNote(ticketId: string, channel: TicketChannel, body: string): Promise<void> {
+    await this.messages.save(
+      this.messages.create({
+        ticketId,
+        authorType: TicketAuthorType.SISTEMA,
+        channel,
+        body,
+        fromEmail: null,
+      }),
+    );
   }
 
   async uploadAttachment(

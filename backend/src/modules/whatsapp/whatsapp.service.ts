@@ -589,6 +589,14 @@ private extractDocumentMedia(msg: any): { id: string; mimeType: string; filename
   }
 
   // --- Envío saliente (WhatsApp Cloud API) -----------------------------------
+  // Base de la Graph API: por defecto la oficial; se puede apuntar a un mock en
+  // desarrollo vía WHATSAPP_GRAPH_BASE_URL (harness de pruebas). La versión de la
+  // API es la del proyecto (GRAPH_API_VERSION).
+  private graphUrl(path: string): string {
+    const base = (this.config.get<string>('whatsapp.graphBaseUrl') || 'https://graph.facebook.com').replace(/\/+$/, '');
+    return `${base}/${GRAPH_API_VERSION}/${path}`;
+  }
+
   async sendOutbound(to: string, text: string): Promise<{ ok: boolean; error?: string }> {
     const token = this.config.get<string>('whatsapp.accessToken');
     const phoneNumberId = this.config.get<string>('whatsapp.phoneNumberId');
@@ -597,7 +605,7 @@ private extractDocumentMedia(msg: any): { id: string; mimeType: string; filename
       return { ok: false, error: 'WhatsApp no configurado (faltan credenciales)' };
     }
     try {
-      const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
+      const res = await fetch(this.graphUrl(`${phoneNumberId}/messages`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }),
@@ -613,6 +621,134 @@ private extractDocumentMedia(msg: any): { id: string; mimeType: string; filename
       this.logger.error(`[WA] Fallo envío a ${to}: ${(e as Error).message}`);
       return { ok: false, error: (e as Error).message };
     }
+  }
+
+  // Regla de tipo de media para la Cloud API (según la doc oficial de Meta):
+  // imágenes SOLO JPEG/PNG y ≤ 5 MB se mandan como `image`; todo lo demás
+  // (WebP/GIF, JPEG/PNG > 5 MB, PDF/Office/TXT/CSV) se intenta como `document`.
+  // Meta puede rechazar formatos no soportados (p.ej. CSV no es oficial):
+  // el fallo se reporta con un aviso y el archivo queda guardado en el ticket.
+  static classifyMedia(filename: string, mimeType: string, sizeBytes: number): 'image' | 'document' {
+    const normalizedMime = String(mimeType || '')
+      .toLowerCase()
+      .split(';')[0]
+      .trim();
+    const isSmallJpegOrPng =
+      (normalizedMime === 'image/jpeg' || normalizedMime === 'image/png') && sizeBytes <= 5 * 1024 * 1024;
+    void filename;
+    return isSmallJpegOrPng ? 'image' : 'document';
+  }
+
+  // Sube un archivo a media de la Cloud API y devuelve el media id (persiste
+  // 30 días). Se envía por id (nunca por link): no exponemos MinIO y evitamos el
+  // caché de 10 min de Meta sobre URLs.
+  async uploadMediaToMeta(
+    buffer: Buffer,
+    mimeType: string,
+    filename: string,
+  ): Promise<{ id?: string; error?: string }> {
+    const token = this.config.get<string>('whatsapp.accessToken');
+    const phoneNumberId = this.config.get<string>('whatsapp.phoneNumberId');
+    if (!token || !phoneNumberId) {
+      return { error: 'WhatsApp no configurado (faltan credenciales)' };
+    }
+    try {
+      const form = new FormData();
+      form.append('messaging_product', 'whatsapp');
+      form.append('type', mimeType);
+      // Copia a un Uint8Array sobre ArrayBuffer (el Buffer<NodeJS> no matchea el
+      // tipo BlobPart de undici para TypedArrays sobre SharedArrayBuffer).
+      const bytes = new Uint8Array(buffer.length);
+      bytes.set(buffer);
+      form.append('file', new Blob([bytes], { type: mimeType }), filename);
+      const res = await fetch(this.graphUrl(`${phoneNumberId}/media`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form as unknown as BodyInit,
+      });
+      const data = (await res.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
+      if (!res.ok || !data.id) {
+        this.logger.error(`[WA] Fallo upload media «${filename}»: ${res.status} ${JSON.stringify(data)}`);
+        return { error: data?.error?.message || `HTTP ${res.status}` };
+      }
+      this.logger.log(`[WA] Media subida «${filename}» -> ${data.id}`);
+      return { id: data.id };
+    } catch (e) {
+      this.logger.error(`[WA] Fallo upload media «${filename}»: ${(e as Error).message}`);
+      return { error: (e as Error).message };
+    }
+  }
+
+  // Envía una media ya subida (image o document) por su media id.
+  async sendMediaMessage(
+    to: string,
+    kind: 'image' | 'document',
+    mediaId: string,
+    opts: { filename?: string } = {},
+  ): Promise<{ ok: boolean; error?: string }> {
+    const token = this.config.get<string>('whatsapp.accessToken');
+    const phoneNumberId = this.config.get<string>('whatsapp.phoneNumberId');
+    if (!token || !phoneNumberId) {
+      return { ok: false, error: 'WhatsApp no configurado (faltan credenciales)' };
+    }
+    const payload: Record<string, unknown> = { messaging_product: 'whatsapp', to, type: kind };
+    if (kind === 'image') {
+      payload.image = { id: mediaId };
+    } else {
+      payload.document = { id: mediaId, filename: opts.filename };
+    }
+    try {
+      const res = await fetch(this.graphUrl(`${phoneNumberId}/messages`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+      if (!res.ok) {
+        this.logger.error(`[WA] Fallo envío media ${kind} a ${to}: ${res.status} ${JSON.stringify(data)}`);
+        return { ok: false, error: data?.error?.message || `HTTP ${res.status}` };
+      }
+      this.logger.log(`[WA] Media ${kind} enviada a ${to}${opts.filename ? ` («${opts.filename}»)` : ''}`);
+      return { ok: true };
+    } catch (e) {
+      this.logger.error(`[WA] Fallo envío media ${kind} a ${to}: ${(e as Error).message}`);
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+
+  // Envío saliente de una respuesta con adjuntos: primero el texto (si hay) y
+  // después cada archivo como image/document según la regla de clasificación.
+  // Un archivo que falla NO bloquea al resto; el resultado detalla cada intento
+  // para que el caller agregue los avisos de sistema en el ticket.
+  async sendOutboundWithAttachments(
+    to: string,
+    text: string,
+    attachments: Array<{ filename: string; buffer: Buffer; mimeType: string }>,
+  ): Promise<{
+    text: { ok: boolean; error?: string };
+    media: Array<{ filename: string; kind: 'image' | 'document'; ok: boolean; error?: string }>;
+  }> {
+    let textResult: { ok: boolean; error?: string } = { ok: true };
+    const cleanText = (text || '').trim();
+    if (cleanText) {
+      textResult = await this.sendOutbound(to, cleanText);
+    } else {
+      // Body vacío: NO mandar `text.body:''` (Meta responde 400 "text.body is
+      // required"). Respuesta solo-adjuntos → no hay mensaje de texto.
+      this.logger.log(`[WA] Respuesta sin texto a ${to}: solo adjuntos (${attachments.length})`);
+    }
+    const media: Array<{ filename: string; kind: 'image' | 'document'; ok: boolean; error?: string }> = [];
+    for (const att of attachments) {
+      const kind = WhatsappService.classifyMedia(att.filename, att.mimeType, att.buffer.length);
+      const upload = await this.uploadMediaToMeta(att.buffer, att.mimeType, att.filename);
+      if (!upload.id) {
+        media.push({ filename: att.filename, kind, ok: false, error: upload.error || 'sin media id' });
+        continue;
+      }
+      const sent = await this.sendMediaMessage(to, kind, upload.id, { filename: att.filename });
+      media.push({ filename: att.filename, kind, ok: sent.ok, error: sent.error });
+    }
+    return { text: textResult, media };
   }
 
   // Envío de plantilla pre-aprobada por Meta (necesario para mensajes iniciados por

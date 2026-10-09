@@ -151,6 +151,18 @@ export class TicketsController {
     return this.service.uploadAttachment(messageId, file);
   }
 
+  // Despacha el envío saliente (WhatsApp/email) de un mensaje con sus adjuntos.
+  // El frontend lo llama DESPUÉS de crear el mensaje (dispatch:false) y subir
+  // los archivos, para que el envío incluya los adjuntos.
+  @Post('messages/:messageId/dispatch')
+  @Permissions(PERMISSIONS.TICKETS_UPDATE)
+  dispatchMessage(
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.dispatchMessage(messageId, user);
+  }
+
   // Descarga de un adjunto (imagen inline o attachment) servida por el backend
   // desde MinIO. Requiere autenticación (guard global).
   @Get('attachments/:attachmentId/download')
