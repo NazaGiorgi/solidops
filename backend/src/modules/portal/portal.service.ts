@@ -197,6 +197,8 @@ export class PortalService {
       .leftJoinAndSelect('t.slaRecords', 'sla')
       .where('t.id = :id', { id })
       .andWhere('t.customer_id = :cid', { cid: customerId })
+      .addOrderBy('messages.createdAt', 'ASC')
+      .addOrderBy('messages.id', 'ASC')
       .getOne();
     if (!t) throw new NotFoundException('Ticket no encontrado');
     return t;

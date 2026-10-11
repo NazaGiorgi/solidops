@@ -10,6 +10,7 @@ export function formatDate(iso?: string | null): string {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'America/Argentina/Buenos_Aires',
   });
 }
 
@@ -17,14 +18,14 @@ export function formatDay(iso?: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
 }
 
 export function formatTime(iso?: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
 }
 
 export function timeAgo(iso?: string | null): string {

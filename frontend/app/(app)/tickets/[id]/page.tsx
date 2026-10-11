@@ -952,12 +952,46 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           {ticket.messages.length === 0 && (ticket.mergedMessages?.length ?? 0) === 0 && (
             <Empty message="Sin mensajes" />
           )}
-          {ticket.messages.map((m) => (
-            <div className="msg" key={m.id}>
-              <div className="who">
-                {m.authorType} · {CHANNEL_LABELS[m.channel] || m.channel} · {formatTime(m.createdAt)}
-                {m.fromEmail ? ` · ${m.fromEmail}` : ''}
-              </div>
+          {[...ticket.messages]
+            .sort((a, b) => {
+              const ta = new Date(a.createdAt).getTime();
+              const tb = new Date(b.createdAt).getTime();
+              if (ta !== tb) return ta - tb;
+              if (a.id < b.id) return -1;
+              if (a.id > b.id) return 1;
+              return 0;
+            })
+            .map((m, idx, arr) => {
+              const prev = arr[idx - 1];
+              const showDay =
+                !prev ||
+                formatDay(m.createdAt) !== formatDay(prev.createdAt);
+              let label = `${m.authorType} · ${CHANNEL_LABELS[m.channel] || m.channel}`;
+              if (m.authorType === 'tecnico') {
+                if (ticket.source === 'whatsapp') label = 'técnico · enviado por WhatsApp';
+                else if (ticket.source === 'email') label = 'técnico · enviado por email';
+                else if (ticket.source === 'portal' || ticket.source === 'manual') label = 'técnico · portal';
+              }
+              return (
+                <div key={m.id}>
+                  {showDay && (
+                    <div
+                      className="muted"
+                      style={{
+                        textAlign: 'center',
+                        fontSize: 12,
+                        margin: '12px 0',
+                        opacity: 0.8,
+                      }}
+                    >
+                      {formatDay(m.createdAt)}
+                    </div>
+                  )}
+                  <div className="msg">
+                    <div className="who">
+                      {label} · {formatTime(m.createdAt)}
+                      {m.fromEmail ? ` · ${m.fromEmail}` : ''}
+                    </div>
               {m.bodyHtml ? (
                 // HTML ya sanitizado en backend (sin scripts/eventos/javascript).
                 // Se muestra con innerHTML; el contenido fue saneado al ingerir.
@@ -979,26 +1013,43 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
                         </button>
                       ))}
                     </div>
-                  )}
-            </div>
-          ))}
-          {(ticket.mergedMessages ?? []).map((m) => (
-            <div className="msg msg-merged" key={m.id}>
-              <div className="who">
-                {m.authorType} · {CHANNEL_LABELS[m.channel] || m.channel} · {formatTime(m.createdAt)}
-                {m.fromEmail ? ` · ${m.fromEmail}` : ''}
-                {m.ticketId ? (
-                  <>
-                    {' · de '}
-                    <Link href={`/tickets/${m.ticketId}`} className="link">
-                      #{m.ticketId.slice(0, 8)}
-                    </Link>
-                  </>
-                ) : null}
-              </div>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
-            </div>
-          ))}
+                  );\n                });\n            })}\n          ))}\n        </div>
+
+
+          {(ticket.mergedMessages ?? [])
+            .sort((a, b) => {
+              const ta = new Date(a.createdAt).getTime();
+              const tb = new Date(b.createdAt).getTime();
+              if (ta !== tb) return ta - tb;
+              if (a.id < b.id) return -1;
+              if (a.id > b.id) return 1;
+              return 0;
+            })
+            .map((m) => {
+              let label = `${m.authorType} · ${CHANNEL_LABELS[m.channel] || m.channel}`;
+              if (m.authorType === 'tecnico') {
+                if (ticket.source === 'whatsapp') label = 'técnico · enviado por WhatsApp';
+                else if (ticket.source === 'email') label = 'técnico · enviado por email';
+                else if (ticket.source === 'portal' || ticket.source === 'manual') label = 'técnico · portal';
+              }
+              return (
+                <div className="msg msg-merged" key={m.id}>
+                  <div className="who">
+                    {label} · {formatTime(m.createdAt)}
+                    {m.fromEmail ? ` · ${m.fromEmail}` : ''}
+                    {m.ticketId ? (
+                      <>
+                        {' · de '}
+                        <Link href={`/tickets/${m.ticketId}`} className="link">
+                          #{m.ticketId.slice(0, 8)}
+                        </Link>
+                      </>
+                    ) : null}
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+                </div>
+              );
+            })}
         </div>
         <div className="mt-16 flex">
           <textarea

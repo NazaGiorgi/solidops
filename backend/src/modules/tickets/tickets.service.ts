@@ -250,6 +250,8 @@ export class TicketsService {
       .where('t.id = :id', { id })
       .leftJoinAndSelect('t.messages', 'messages')
       .leftJoinAndSelect('messages.attachments', 'attachments')
+      .addOrderBy('messages.createdAt', 'ASC')
+      .addOrderBy('messages.id', 'ASC')
       .getOne();
     if (!t) throw new NotFoundException('Ticket no encontrado');
 
@@ -282,6 +284,7 @@ export class TicketsService {
           .leftJoinAndSelect('m.attachments', 'attachments')
           .where('m.ticket_id IN (:...ids)', { ids: childIds })
           .orderBy('m.createdAt', 'ASC')
+          .addOrderBy('m.id', 'ASC')
           .getMany();
       }
     }

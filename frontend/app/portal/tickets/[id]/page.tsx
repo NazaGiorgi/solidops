@@ -237,11 +237,45 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
       <Card title="ConversaciÃ³n">
         <div className="stack">
           {ticket.messages.length === 0 && <Empty message="Sin mensajes" />}
-          {ticket.messages.map((m) => (
-            <div className="msg" key={m.id}>
-              <div className="who">
-                {m.authorType} Â· {CHANNEL_LABELS[m.channel] || m.channel} Â· {formatTime(m.createdAt)}
-              </div>
+          {[...ticket.messages]
+            .sort((a,b)=>{const ta=new Date(a.createdAt).getTime();const tb=new Date(b.createdAt).getTime();if(ta!==tb)return ta-tb;if(a.id<b.id)return -1;if(a.id>b.id)return 1;return 0;})
+            .map((m,idx,arr)=>{
+              const prev=arr[idx-1];const showDay=!prev||formatDay(m.createdAt)!==formatDay(prev.createdAt);
+              let label=${m.authorType} · ;
+              if(m.authorType==='tecnico'){if(ticket.source==='whatsapp')label='técnico · enviado por WhatsApp';else if(ticket.source==='email')label='técnico · enviado por email';else if(ticket.source==='portal'||ticket.source==='manual')label='técnico · portal';}
+              return (
+                <div key={m.id}>
+                  {showDay&&(<div className='muted' style={{textAlign:'center',fontSize:12,margin:'12px 0',opacity:.8}}>{formatDay(m.createdAt)}</div>)}
+                  <div className='msg'>
+                    <div className='who'>{label} · {formatTime(m.createdAt)}</div>
+              const showDay =
+                !prev ||
+                formatDay(m.createdAt) !== formatDay(prev.createdAt);
+              let label = `${m.authorType} Â· ${CHANNEL_LABELS[m.channel] || m.channel}`;
+              if (m.authorType === 'tecnico') {
+                if (ticket.source === 'whatsapp') label = 'tÃ©cnico Â· enviado por WhatsApp';
+                else if (ticket.source === 'email') label = 'tÃ©cnico Â· enviado por email';
+                else if (ticket.source === 'portal' || ticket.source === 'manual') label = 'tÃ©cnico Â· portal';
+              }
+              return (
+                <div key={m.id}>
+                  {showDay && (
+                    <div
+                      className="muted"
+                      style={{
+                        textAlign: 'center',
+                        fontSize: 12,
+                        margin: '12px 0',
+                        opacity: 0.8,
+                      }}
+                    >
+                      {formatDay(m.createdAt)}
+                    </div>
+                  )}
+                  <div className="msg">
+                    <div className="who">
+                      {label} Â· {formatTime(m.createdAt)}
+                    </div>
               {m.bodyHtml ? (
                 // HTML ya sanitizado en backend (sin scripts/eventos/javascript).
                 // Se muestra con innerHTML; el contenido fue saneado al ingerir.
@@ -261,11 +295,11 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
                     >
                       ðŸ“Ž {a.filename}
                     </button>
-                  ))}
+                );\n              });\n            })}\n        </div>
                 </div>
               )}
             </div>
-          ))}
+                );\n              });\n            })}\n        </div>
         </div>
         <div className="mt-16 flex">
           <textarea className="textarea" placeholder="escribÃ­ una respuestaâ€¦" value={body} onChange={(e) => setBody(e.target.value)} />
@@ -328,7 +362,7 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
                   âœ•
                 </button>
               </div>
-            ))}
+        </div>
           </div>
         )}
         <div className="mt-8 text-right">
