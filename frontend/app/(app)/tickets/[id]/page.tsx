@@ -17,6 +17,7 @@ import {
   SLA_PILLS,
   formatDate,
   formatTime,
+  formatDay,
   CHANNEL_LABELS,
   ticketNumberDisplay,
 } from '../../../../lib/helpers';
@@ -1013,9 +1014,12 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
                         </button>
                       ))}
                     </div>
-                  );\n                });\n            })}\n          ))}\n        </div>
-
-
+                  )}
+                </div>
+              </div>
+              );
+            })
+          }
           {(ticket.mergedMessages ?? [])
             .sort((a, b) => {
               const ta = new Date(a.createdAt).getTime();

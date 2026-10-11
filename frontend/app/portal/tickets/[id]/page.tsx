@@ -5,7 +5,7 @@ import { api, getToken, API_URL } from '../../../../lib/api';
 import { usePortalAuth } from '../../../../lib/portal-auth';
 import { Card, Empty, Pill } from '../../../../components/ui';
 import { ErrorNotice } from '../../../../components/error-notice';
-import { STATUS_PILLS, STATUS_LABELS, PRIORITY_PILLS, PRIORITY_LABELS, SLA_PILLS, formatDate, formatTime, CHANNEL_LABELS, ticketNumberDisplay } from '../../../../lib/helpers';
+import { STATUS_PILLS, STATUS_LABELS, PRIORITY_PILLS, PRIORITY_LABELS, SLA_PILLS, formatDate, formatTime, formatDay, CHANNEL_LABELS, ticketNumberDisplay } from '../../../../lib/helpers';
 import {
   ALLOWED_ATTACHMENTS_LABEL,
   MAX_ATTACH_BYTES,
@@ -27,6 +27,7 @@ interface PortalTicketDetail {
   title: string;
   status: string;
   priority: string;
+  source: string;
   createdAt: string;
   ticketNumber: number | null;
   messages: Array<{
@@ -238,19 +239,17 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
         <div className="stack">
           {ticket.messages.length === 0 && <Empty message="Sin mensajes" />}
           {[...ticket.messages]
-            .sort((a,b)=>{const ta=new Date(a.createdAt).getTime();const tb=new Date(b.createdAt).getTime();if(ta!==tb)return ta-tb;if(a.id<b.id)return -1;if(a.id>b.id)return 1;return 0;})
-            .map((m,idx,arr)=>{
-              const prev=arr[idx-1];const showDay=!prev||formatDay(m.createdAt)!==formatDay(prev.createdAt);
-              let label=${m.authorType} · ;
-              if(m.authorType==='tecnico'){if(ticket.source==='whatsapp')label='técnico · enviado por WhatsApp';else if(ticket.source==='email')label='técnico · enviado por email';else if(ticket.source==='portal'||ticket.source==='manual')label='técnico · portal';}
-              return (
-                <div key={m.id}>
-                  {showDay&&(<div className='muted' style={{textAlign:'center',fontSize:12,margin:'12px 0',opacity:.8}}>{formatDay(m.createdAt)}</div>)}
-                  <div className='msg'>
-                    <div className='who'>{label} · {formatTime(m.createdAt)}</div>
-              const showDay =
-                !prev ||
-                formatDay(m.createdAt) !== formatDay(prev.createdAt);
+            .sort((a, b) => {
+              const ta = new Date(a.createdAt).getTime();
+              const tb = new Date(b.createdAt).getTime();
+              if (ta !== tb) return ta - tb;
+              if (a.id < b.id) return -1;
+              if (a.id > b.id) return 1;
+              return 0;
+            })
+            .map((m, idx, arr) => {
+              const prev = arr[idx - 1];
+              const showDay = !prev || formatDay(m.createdAt) !== formatDay(prev.createdAt);
               let label = `${m.authorType} Â· ${CHANNEL_LABELS[m.channel] || m.channel}`;
               if (m.authorType === 'tecnico') {
                 if (ticket.source === 'whatsapp') label = 'tÃ©cnico Â· enviado por WhatsApp';
@@ -260,15 +259,7 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
               return (
                 <div key={m.id}>
                   {showDay && (
-                    <div
-                      className="muted"
-                      style={{
-                        textAlign: 'center',
-                        fontSize: 12,
-                        margin: '12px 0',
-                        opacity: 0.8,
-                      }}
-                    >
+                    <div className="muted" style={{ textAlign: 'center', fontSize: 12, margin: '12px 0', opacity: 0.8 }}>
                       {formatDay(m.createdAt)}
                     </div>
                   )}
@@ -276,30 +267,32 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
                     <div className="who">
                       {label} Â· {formatTime(m.createdAt)}
                     </div>
-              {m.bodyHtml ? (
-                // HTML ya sanitizado en backend (sin scripts/eventos/javascript).
-                // Se muestra con innerHTML; el contenido fue saneado al ingerir.
-                <div className="msg-html" style={{ wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: m.bodyHtml }} />
-              ) : (
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
-              )}
-              {m.attachments && m.attachments.length > 0 && (
-                <div className="flex wrap" style={{ gap: 8, marginTop: 8 }}>
-                  {m.attachments.map((a) => (
-                    <button
-                      key={a.id}
-                      className="btn btn-sm"
-                      type="button"
-                      onClick={() => downloadAttachment(a.id, a.filename)}
-                      title={`${a.filename}${a.sizeBytes ? ` (${Math.round(a.sizeBytes / 1024)} KB)` : ''}`}
-                    >
-                      ðŸ“Ž {a.filename}
-                    </button>
-                );\n              });\n            })}\n        </div>
+                    {m.bodyHtml ? (
+                      // HTML ya sanitizado en backend (sin scripts/eventos/javascript).
+                      // Se muestra con innerHTML; el contenido fue saneado al ingerir.
+                      <div className="msg-html" style={{ wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: m.bodyHtml }} />
+                    ) : (
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+                    )}
+                    {m.attachments && m.attachments.length > 0 && (
+                      <div className="flex wrap" style={{ gap: 8, marginTop: 8 }}>
+                        {m.attachments.map((a) => (
+                          <button
+                            key={a.id}
+                            className="btn btn-sm"
+                            type="button"
+                            onClick={() => downloadAttachment(a.id, a.filename)}
+                            title={`${a.filename}${a.sizeBytes ? ` (${Math.round(a.sizeBytes / 1024)} KB)` : ''}`}
+                          >
+                            ðŸ“Ž {a.filename}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-                );\n              });\n            })}\n        </div>
+              );
+            })}
         </div>
         <div className="mt-16 flex">
           <textarea className="textarea" placeholder="escribÃ­ una respuestaâ€¦" value={body} onChange={(e) => setBody(e.target.value)} />
@@ -326,7 +319,7 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
           </span>
         </div>
         {pendingFiles.length > 0 && (
-          <div className="flex wrap" style={{ gap: 8, marginTop: 8 }}>
+          <div className="flex wrap" style={{ marginTop: 8 }}>
             {pendingFiles.map((p) => (
               <div
                 key={p.key}
@@ -362,7 +355,7 @@ export default function PortalTicketDetail({ params }: { params: { id: string } 
                   âœ•
                 </button>
               </div>
-        </div>
+            ))}
           </div>
         )}
         <div className="mt-8 text-right">
