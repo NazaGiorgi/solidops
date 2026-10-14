@@ -1077,17 +1077,32 @@ export class TicketsService {
     }
   }
 
-  // Habilita automáticamente el acceso al portal del contacto cuando un email
-  // entrante del mismo crea o alimenta un ticket (decision: todo cliente que
-  // escribe recibe acceso al portal). Solo escribe si estaba apagado. No envía
-  // email: el cliente usa "¿Olvidaste tu contraseña?" para fijar la primera
-  // contraseña (flujo existente de reset, funciona sin password previo).
+  // Habilita automáticamente el acceso al portal SOLO cuando el contacto acaba
+  // de ser creado por esta ingesta (decisión: todo cliente NUEVO que escribe
+  // recibe acceso al portal). Nunca re-habilita un contacto existente con el
+  // portal apagado (hotfix Tanda 1.5: evita que la ingesta revierta el apagado
+  // de contención). Todo cambio de portal_enabled por la ingesta queda auditado.
+  // No envía email: el cliente usa "¿Olvidaste tu contraseña?" para fijar la
+  // primera contraseña (flujo existente de reset, funciona sin password previo).
   private async ensurePortalEnabled(contactId: string): Promise<void> {
     try {
       const contact = await this.contacts.findOne({ where: { id: contactId } });
       if (contact && !contact.portalEnabled) {
         contact.portalEnabled = true;
         await this.contacts.save(contact);
+        await this.audit.log({
+          user: null,
+          action: AuditAction.UPDATE,
+          entityType: AuditEntityType.CONTACT,
+          entityId: contact.id,
+          oldValue: { portalEnabled: false },
+          newValue: { portalEnabled: true },
+          meta: {
+            automatic: true,
+            via: 'email_ingestion',
+            reason: 'new_contact_portal_autoenable',
+          },
+        });
         this.logger.log(
           `[EMAIL] Portal habilitado automáticamente para contacto ${contact.email ?? contact.id}`,
         );
@@ -1108,6 +1123,9 @@ export class TicketsService {
     contactId: string;
     customerId: string;
     siteId?: string | null;
+    // True si la ingesta acaba de crear el contacto (remitente desconocido).
+    // Habilita la auto-habilitación del portal SOLO en ese caso (Tanda 1.5).
+    contactCreated?: boolean;
     shadow?: boolean;
     legacyGroup?: string | null;
     attachments?: Array<{ filename: string; url: string; mimeType: string; sizeBytes?: number; cid?: string | null; disposition?: 'inline' | 'attachment' }>;
@@ -1183,7 +1201,7 @@ export class TicketsService {
       existing.lastActivityAt = new Date();
       await this.tickets.save(existing);
       await this.saveAttachments(msg.id, data.attachments);
-      await this.ensurePortalEnabled(data.contactId);
+      if (data.contactCreated) await this.ensurePortalEnabled(data.contactId);
       await this.emitClientReplyBroadcast(
         existing,
         data.body ?? '(sin contenido)',
@@ -1227,7 +1245,7 @@ export class TicketsService {
     await this.emitNewTicketBroadcast(ticket);
     const contact = await this.contacts.findOne({ where: { id: data.contactId } });
     await this.notifyNewEmailTicket(ticket, contact?.name ?? null);
-    await this.ensurePortalEnabled(data.contactId);
+    if (data.contactCreated) await this.ensurePortalEnabled(data.contactId);
     return { ticket, action: 'created' };
   }
 

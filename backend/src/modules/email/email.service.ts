@@ -73,6 +73,12 @@ export class EmailService {
     let contactId = dto.contactId;
     let customerId: string | null = dto.customerId ?? null;
     let siteId: string | null = null;
+    // True SOLO si este correo dio de alta el contacto por primera vez. La
+    // habilitación automática del portal (decisión "todo cliente que escribe
+    // recibe acceso") se limita a este caso: nunca re-habilita un contacto
+    // existente con el portal apagado (hotfix Tanda 1.5, evita que la ingesta
+    // revierta el apagado de contención).
+    let contactCreated = false;
 
     if (!contactId) {
       let contact = await this.contacts.findOne({
@@ -83,6 +89,7 @@ export class EmailService {
         // que TODO correo entrante genere un ticket (decisión de negocio). Se
         // vincula el remitente para futuros correos de la misma dirección.
         contact = await this.ensureContactForUnknownSender(dto.fromEmail);
+        contactCreated = true;
       }
       contactId = contact.id;
       customerId = contact.customerId;
@@ -100,6 +107,7 @@ export class EmailService {
       contactId,
       customerId,
       siteId,
+      contactCreated,
       shadow: dto.shadow,
       legacyGroup: dto.legacyGroup,
       attachments: dto.attachments as Array<{ filename: string; url: string; mimeType: string; sizeBytes?: number; cid?: string | null; disposition?: 'inline' | 'attachment' }>,
