@@ -7,6 +7,7 @@ import { Customer } from '../src/entities/customer.entity';
 import { Ticket } from '../src/entities/ticket.entity';
 import { AuditLog } from '../src/entities/audit-log.entity';
 import { EmailService } from '../src/modules/email/email.service';
+import { assertIsolatedTestDb } from './test-db.guard';
 
 jest.setTimeout(30000);
 
@@ -49,6 +50,7 @@ describe('Portal auto-enable on email ingestion e2e', () => {
   }
 
   beforeAll(async () => {
+    assertIsolatedTestDb();
     moduleFixture = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();

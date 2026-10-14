@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import { assertIsolatedTestDb } from './test-db.guard';
 
 // Smoke test for the core auth + RBAC flow.
 // Requires a running Postgres/Redis/MinIO (or the full stack via docker-compose).
@@ -11,6 +12,7 @@ describe('Smoke e2e (auth + protected route)', () => {
   let accessToken: string;
 
   beforeAll(async () => {
+    assertIsolatedTestDb();
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -39,7 +41,10 @@ describe('Smoke e2e (auth + protected route)', () => {
   it('logs in as a seeded admin/supervisor and gets tokens', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/auth/login')
-      .send({ email: 'ana@msp.local', password: 'demo1234' })
+      .send({
+        email: process.env.E2E_ADMIN_EMAIL || 'ana@msp.local',
+        password: process.env.E2E_ADMIN_PASSWORD || 'demo1234',
+      })
       .expect(201);
     expect(res.body.accessToken).toBeDefined();
     expect(res.body.user.role).toBe('Supervisor');
@@ -55,7 +60,7 @@ describe('Smoke e2e (auth + protected route)', () => {
       .get('/api/tickets')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(Array.isArray(res.body.items)).toBe(true);
   });
 
   it('login with a wrong password fails', async () => {

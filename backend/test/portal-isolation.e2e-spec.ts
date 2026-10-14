@@ -18,6 +18,7 @@ import {
   TicketChannel,
   WorkshopQuoteStatus,
 } from '../src/common/enums';
+import { assertIsolatedTestDb } from './test-db.guard';
 
 jest.setTimeout(30000);
 
@@ -66,6 +67,7 @@ describe('Portal isolation e2e', () => {
   }
 
   beforeAll(async () => {
+    assertIsolatedTestDb();
     moduleFixture = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
