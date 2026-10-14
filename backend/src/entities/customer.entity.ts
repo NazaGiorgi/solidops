@@ -14,6 +14,11 @@ export class Customer extends SoftDeleteEntity {
   @Column({ type: 'boolean', default: true })
   active: boolean;
 
+  // Por defecto cada contacto ve solo sus propios tickets. Solo clientes
+  // habilitados explícitamente pueden compartir el portal entre contactos.
+  @Column({ name: 'shared_portal', type: 'boolean', default: false })
+  sharedPortal: boolean;
+
   @OneToMany(() => Contact, (contact) => contact.customer)
   contacts: Contact[];
 

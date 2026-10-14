@@ -130,21 +130,21 @@ export class PortalController {
     @Query('search') search: string | undefined,
     @CurrentPortalContact() contact: PortalContact,
   ) {
-    return this.service.listTickets(contact.customerId, status, search);
+    return this.service.listTickets(contact, status, search);
   }
 
   @Public()
   @Get('tickets/:id')
   @UseGuards(PortalGuard)
   detail(@Param('id') id: string, @CurrentPortalContact() contact: PortalContact) {
-    return this.service.getTicket(id, contact.customerId);
+    return this.service.getTicket(id, contact);
   }
 
   @Public()
   @Get('reports')
   @UseGuards(PortalGuard)
   reports(@CurrentPortalContact() contact: PortalContact) {
-    return this.service.reports(contact.customerId);
+    return this.service.reports(contact);
   }
 
   @Public()
@@ -165,7 +165,7 @@ export class PortalController {
     @Body() dto: PortalMessageDto,
     @CurrentPortalContact() contact: PortalContact,
   ) {
-    return this.service.addMessage(id, contact.customerId, dto.body);
+    return this.service.addMessage(id, contact, dto.body);
   }
 
   // Subida de adjuntos del cliente portal. Reusa la misma allowlist/tope que el
@@ -179,7 +179,7 @@ export class PortalController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentPortalContact() contact: PortalContact,
   ) {
-    return this.service.uploadAttachment(messageId, file, contact.customerId);
+    return this.service.uploadAttachment(messageId, file, contact);
   }
 
   // Descarga de adjuntos: verifica en el service que el adjunto pertenezca a un
@@ -195,7 +195,7 @@ export class PortalController {
     try {
       const { buffer, filename, mimeType } = await this.service.downloadAttachment(
         id,
-        contact.customerId,
+        contact,
       );
       res.setHeader('Content-Type', mimeType || 'application/octet-stream');
       res.setHeader(
@@ -215,7 +215,7 @@ export class PortalController {
   @Get('quotes')
   @UseGuards(PortalGuard)
   quotes(@CurrentPortalContact() contact: PortalContact) {
-    return this.service.quotes(contact.customerId, contact.id);
+    return this.service.quotes(contact);
   }
 
   @Public()

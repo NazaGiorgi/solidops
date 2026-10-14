@@ -150,7 +150,7 @@ export class CustomersService {
     actor: AuthenticatedUser,
   ) {
     const c = await this.findCustomer(id);
-    const old = { name: c.name, active: c.active };
+    const old = { name: c.name, active: c.active, sharedPortal: c.sharedPortal };
     Object.assign(c, dto);
     await this.customers.save(c);
     await this.audit.log({
@@ -159,7 +159,7 @@ export class CustomersService {
       entityType: AuditEntityType.CUSTOMER,
       entityId: id,
       oldValue: old,
-      newValue: { name: c.name, active: c.active },
+      newValue: { name: c.name, active: c.active, sharedPortal: c.sharedPortal },
     });
     return c;
   }

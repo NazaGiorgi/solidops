@@ -36,7 +36,8 @@ export class Contact extends SoftDeleteEntity {
   preferredChannel: ContactPreferredChannel;
 
   // Client portal access. When enabled, this contact can log into the portal
-  // with its email + password and only ever sees this customer's tickets.
+  // with its email + password and sees only its own tickets unless the customer
+  // explicitly enables shared portal access.
   @Column({ name: 'portal_enabled', type: 'boolean', default: false })
   portalEnabled: boolean;
 

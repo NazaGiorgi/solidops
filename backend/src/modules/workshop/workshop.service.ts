@@ -636,9 +636,14 @@ export class WorkshopService {
   // Portal (presupuestos del cliente)
   // --------------------------------------------------------------------------
 
-  // Presupuestos pendientes de los equipos del cliente (scope por customerId).
-  async portalQuotes(customerId: string, _contactId?: string) {
-    const eqs = await this.eqRepo.find({ where: { customerId } });
+  // Presupuestos pendientes: privados por contacto salvo que el cliente haya
+  // habilitado explícitamente el portal compartido.
+  async portalQuotes(customerId: string, contactId: string) {
+    const customer = await this.customerRepo.findOne({ where: { id: customerId } });
+    if (!customer) return [];
+    const eqs = await this.eqRepo.find({
+      where: customer.sharedPortal ? { customerId } : { customerId, contactId },
+    });
     if (eqs.length === 0) return [];
     const ids = eqs.map((e) => e.id);
     const quotes = await this.quoteRepo
@@ -679,6 +684,10 @@ export class WorkshopService {
     if (!quote) throw new NotFoundException('Presupuesto no encontrado');
     const eq = await this.eqRepo.findOne({ where: { id: quote.equipmentId } });
     if (!eq || eq.customerId !== contact.customerId) {
+      throw new NotFoundException('Presupuesto no encontrado para este cliente');
+    }
+    const customer = await this.customerRepo.findOne({ where: { id: contact.customerId } });
+    if (!customer || (!customer.sharedPortal && eq.contactId !== contact.id)) {
       throw new NotFoundException('Presupuesto no encontrado para este cliente');
     }
     if (quote.status !== WorkshopQuoteStatus.PENDIENTE) {

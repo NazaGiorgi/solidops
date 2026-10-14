@@ -19,6 +19,7 @@ import { StorageService } from '../../storage/storage.service';
 import { AuditAction, AuditEntityType, TicketStatus, TicketPriority, TicketAuthorType, TicketChannel } from '../../common/enums';
 import { AuditService } from '../audit/audit.service';
 import { PortalTokenPayload } from './portal.guard';
+import { PortalContact } from './portal-contact.decorator';
 import { normalizeSubjectKey } from '../../common/utils/subject-key.util';
 import { extractEmailDomain, isPersonalEmailDomain } from '../../common/utils/email-domain';
 import {
@@ -161,18 +162,27 @@ export class PortalService {
     return { token, contact: { id: contact.id, name: contact.name, email: contact.email, customerId: contact.customerId } };
   }
 
-  // --- Tickets (scoped by customerId) ---------------------------------------
+  private async isSharedPortal(customerId: string | null): Promise<boolean> {
+    if (!customerId) return false;
+    const customer = await this.customers.findOne({ where: { id: customerId } });
+    return customer?.sharedPortal === true;
+  }
+
+  // --- Tickets (private by contact; shared only by explicit customer flag) ---
   // Default returns the FULL history (all statuses) so clients see past tickets
   // too, not just what's open today. Optional `status` filters the list.
-  async listTickets(customerId: string | null, status?: string, search?: string) {
+  async listTickets(contact: PortalContact, status?: string, search?: string) {
+    if (!contact.customerId) return [];
+    const shared = await this.isSharedPortal(contact.customerId);
     const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.customer', 'customer')
       .leftJoinAndSelect('t.technician', 'technician')
       .leftJoinAndSelect('t.slaRecords', 'sla')
-      .where('t.customer_id = :cid', { cid: customerId })
+      .where('t.customer_id = :cid', { cid: contact.customerId })
       .andWhere('t.shadow = :sh', { sh: false })
       .orderBy('t.createdAt', 'DESC');
+    if (!shared) qb.andWhere('t.contact_id = :contactId', { contactId: contact.id });
     if (status) {
       qb.andWhere('t.status IN (:...statuses)', { statuses: status.split(',') });
     }
@@ -187,8 +197,9 @@ export class PortalService {
     return qb.getMany();
   }
 
-  async getTicket(id: string, customerId: string | null) {
-    const t = await this.tickets
+  async getTicket(id: string, contact: PortalContact) {
+    const shared = await this.isSharedPortal(contact.customerId);
+    const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.customer', 'customer')
       .leftJoinAndSelect('t.technician', 'technician')
@@ -196,12 +207,13 @@ export class PortalService {
       .leftJoinAndSelect('messages.attachments', 'attachments')
       .leftJoinAndSelect('t.slaRecords', 'sla')
       .where('t.id = :id', { id })
-      .andWhere('t.customer_id = :cid', { cid: customerId })
+      .andWhere('t.customer_id = :cid', { cid: contact.customerId })
       .addOrderBy('messages.createdAt', 'ASC')
-      .addOrderBy('messages.id', 'ASC')
-      .getOne();
-    if (!t) throw new NotFoundException('Ticket no encontrado');
-    return t;
+      .addOrderBy('messages.id', 'ASC');
+    if (!shared) qb.andWhere('t.contact_id = :contactId', { contactId: contact.id });
+    const ticket = await qb.getOne();
+    if (!ticket) throw new NotFoundException('Ticket no encontrado');
+    return ticket;
   }
 
   // Descarga un adjunto de un mensaje de un ticket del cliente del portal.
@@ -209,7 +221,7 @@ export class PortalService {
   // ANTES de tocar MinIO, para no exponer adjuntos de otros clientes.
   async downloadAttachment(
     attachmentId: string,
-    customerId: string | null,
+    contact: PortalContact,
   ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
     const att = await this.attachments
       .createQueryBuilder('a')
@@ -218,7 +230,13 @@ export class PortalService {
       .where('a.id = :id', { id: attachmentId })
       .getOne();
     if (!att || !att.fileUrl) throw new NotFoundException('Adjunto no encontrado');
-    if (!customerId || !att.message?.ticket || att.message.ticket.customerId !== customerId) {
+    const shared = await this.isSharedPortal(contact.customerId);
+    if (
+      !contact.customerId ||
+      !att.message?.ticket ||
+      att.message.ticket.customerId !== contact.customerId ||
+      (!shared && att.message.ticket.contactId !== contact.id)
+    ) {
       throw new NotFoundException('Adjunto no encontrado');
     }
     const fileUrl = att.fileUrl;
@@ -262,12 +280,18 @@ export class PortalService {
       }),
     );
     await this.emitPortalTicketEvent(saved, 'ticket:new', dto.description ?? '(sin descripción)');
-    return this.getTicket(saved.id, customerId);
+    return this.getTicket(saved.id, { id: contactId, customerId, email: '', name: '' });
   }
 
-  async addMessage(ticketId: string, customerId: string | null, body: string) {
-    if (!customerId) throw new NotFoundException('Ticket no encontrado');
-    const t = await this.tickets.findOne({ where: { id: ticketId, customerId } });
+  async addMessage(ticketId: string, contact: PortalContact, body: string) {
+    if (!contact.customerId) throw new NotFoundException('Ticket no encontrado');
+    const shared = await this.isSharedPortal(contact.customerId);
+    const qb = this.tickets
+      .createQueryBuilder('t')
+      .where('t.id = :ticketId', { ticketId })
+      .andWhere('t.customer_id = :customerId', { customerId: contact.customerId });
+    if (!shared) qb.andWhere('t.contact_id = :contactId', { contactId: contact.id });
+    const t = await qb.getOne();
     if (!t) throw new NotFoundException('Ticket no encontrado');
     const message = this.messages.create({
       ticketId,
@@ -290,7 +314,7 @@ export class PortalService {
   async uploadAttachment(
     messageId: string,
     file?: Express.Multer.File,
-    customerId?: string | null,
+    contact?: PortalContact,
   ): Promise<TicketAttachment> {
     if (!file || !file.buffer) {
       throw new BadRequestException('Elegí un archivo para adjuntar');
@@ -316,7 +340,13 @@ export class PortalService {
       where: { id: messageId },
       relations: ['ticket'],
     });
-    if (!message || !message.ticket || message.ticket.customerId !== customerId) {
+    const shared = await this.isSharedPortal(contact?.customerId ?? null);
+    if (
+      !message ||
+      !message.ticket ||
+      message.ticket.customerId !== contact?.customerId ||
+      (!shared && message.ticket.contactId !== contact?.id)
+    ) {
       throw new NotFoundException('Mensaje no encontrado');
     }
     if (message.authorType !== TicketAuthorType.CLIENTE) {
@@ -368,15 +398,17 @@ export class PortalService {
     }
   }
 
-  // Reports for the client portal: only the customer's own tickets, by
-  // status/priority and SLA compliance.
-  async reports(customerId: string | null) {
-    const tickets = await this.tickets
+  // Reports are scoped exactly like the ticket list.
+  async reports(contact: PortalContact) {
+    if (!contact.customerId) return { byStatus: {}, byPriority: {}, slaStatus: { verde: 0, amarillo: 0, rojo: 0 }, total: 0 };
+    const shared = await this.isSharedPortal(contact.customerId);
+    const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.slaRecords', 'sla')
-      .where('t.customer_id = :cid', { cid: customerId })
-      .andWhere('t.shadow = :sh', { sh: false })
-      .getMany();
+      .where('t.customer_id = :cid', { cid: contact.customerId })
+      .andWhere('t.shadow = :sh', { sh: false });
+    if (!shared) qb.andWhere('t.contact_id = :contactId', { contactId: contact.id });
+    const tickets = await qb.getMany();
 
     const byStatus: Record<string, number> = {};
     const byPriority: Record<string, number> = {};
@@ -666,9 +698,9 @@ export class PortalService {
 
   // --- Presupuestos de taller (portal) --------------------------------------
 
-  async quotes(customerId: string | null, contactId: string) {
-    if (!customerId) return [];
-    return this.workshop.portalQuotes(customerId, contactId);
+  async quotes(contact: PortalContact) {
+    if (!contact.customerId) return [];
+    return this.workshop.portalQuotes(contact.customerId, contact.id);
   }
 
   async respondQuote(quoteId: string, decision: 'aprobado' | 'rechazado', contact: { id: string; customerId: string | null; email: string; name: string }) {

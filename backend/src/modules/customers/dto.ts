@@ -23,6 +23,10 @@ export class CreateCustomerDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sharedPortal?: boolean;
 }
 
 export class UpdateCustomerDto {
@@ -33,6 +37,10 @@ export class UpdateCustomerDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sharedPortal?: boolean;
 }
 
 export class CreateContactDto {
