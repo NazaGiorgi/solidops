@@ -3,7 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { AiService } from './ai.service';
 import { AiUsageService } from './ai-usage.service';
-import { AiDiagnosticsProvider, AiProvider, ChatMessage, ChatResult, EmbedResult } from './ai.types';
+import {
+  AiDiagnosticsProvider,
+  AiProvider,
+  AiTimeoutError,
+  ChatMessage,
+  ChatResult,
+  EmbedResult,
+} from './ai.types';
 import { TicketsService } from '../tickets/tickets.service';
 
 const user = { id: 'user-1', role: 'Administrador' } as never;
@@ -288,5 +295,102 @@ describe('AiService', () => {
     const resultado = await service.classifyTicket('ticket-1', user);
 
     expect(resultado.ai).toMatchObject({ categoria: 'Taller', prioridad: 'crítica' });
+  });
+
+  it('corta la llamada por timeout y muestra el mensaje exacto', async () => {
+    const proveedor = chatProvider(undefined, new AiTimeoutError(5000));
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = build(
+      proveedor,
+      embedProvider(3),
+      config({ 'ai.chatTimeoutMs': 5000 }),
+      recorded,
+    );
+
+    await expect(service.chat('hola', user)).rejects.toThrow(
+      'La IA tardó demasiado, probá de nuevo',
+    );
+    expect(proveedor.chat).toHaveBeenCalledTimes(1);
+    expect((proveedor.chat as jest.Mock).mock.calls[0][1]).toMatchObject({ timeoutMs: 5000 });
+    expect(recorded[0]).toMatchObject({
+      ok: false,
+      errorMessage: 'La IA tardó demasiado, probá de nuevo',
+    });
+  });
+
+  it('el reintento por idioma recibe sólo el tiempo restante del presupuesto', async () => {
+    const proveedor = chatProvider();
+    (proveedor.chat as jest.Mock)
+      .mockResolvedValueOnce(respuesta('The switch connects devices.'))
+      .mockResolvedValueOnce(respuesta('El switch conecta dispositivos.'));
+    const reloj = jest
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(1000)
+      .mockImplementation(() => 3500);
+    try {
+      const { service } = build(
+        proveedor,
+        embedProvider(3),
+        config({ 'ai.chatTimeoutMs': 5000 }),
+      );
+      await service.chat('hola', user);
+
+      const llamadas = (proveedor.chat as jest.Mock).mock.calls;
+      expect(llamadas).toHaveLength(2);
+      expect(llamadas[0][1].timeoutMs).toBe(5000);
+      expect(llamadas[1][1].timeoutMs).toBe(2500);
+    } finally {
+      reloj.mockRestore();
+    }
+  });
+
+  it('no reintenta si ya se agotó el presupuesto de 5 segundos', async () => {
+    const proveedor = chatProvider({ text: 'The switch connects devices.' });
+    const recorded: Array<Record<string, unknown>> = [];
+    const reloj = jest
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(0)
+      .mockImplementation(() => 6000);
+    try {
+      const { service } = build(
+        proveedor,
+        embedProvider(3),
+        config({ 'ai.chatTimeoutMs': 5000 }),
+        recorded,
+      );
+      await expect(service.chat('hola', user)).rejects.toThrow(
+        'La IA tardó demasiado, probá de nuevo',
+      );
+      expect(proveedor.chat).toHaveBeenCalledTimes(1);
+      expect(recorded[0]).toMatchObject({
+        ok: false,
+        errorMessage: 'La IA tardó demasiado, probá de nuevo',
+      });
+    } finally {
+      reloj.mockRestore();
+    }
+  });
+
+  it('si el reintento agota el tiempo restante, también muestra el mensaje de timeout', async () => {
+    const proveedor = chatProvider();
+    (proveedor.chat as jest.Mock)
+      .mockResolvedValueOnce(respuesta('The switch connects devices.'))
+      .mockRejectedValueOnce(new AiTimeoutError(2500));
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = build(
+      proveedor,
+      embedProvider(3),
+      config({ 'ai.chatTimeoutMs': 5000 }),
+      recorded,
+    );
+
+    await expect(service.chat('hola', user)).rejects.toThrow(
+      'La IA tardó demasiado, probá de nuevo',
+    );
+    expect(proveedor.chat).toHaveBeenCalledTimes(2);
+    expect(recorded[0]).toMatchObject({
+      ok: false,
+      errorMessage: 'La IA tardó demasiado, probá de nuevo',
+    });
   });
 });

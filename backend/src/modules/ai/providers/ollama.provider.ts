@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AiDiagnosticsProvider,
+  AiTimeoutError,
   ChatMessage,
   ChatOptions,
   ChatResult,
@@ -52,41 +53,46 @@ export class OllamaAiProvider implements AiDiagnosticsProvider {
     this.timeoutMs = config.get<number>('ai.chatTimeoutMs') || 180000;
   }
 
-  // Un solo reintento ante error de red/timeout. Errores HTTP (4xx/5xx) no se
-  // reintentan: Ollama ya respondió y repetir sólo agrava la carga en CPU.
+  // Un AbortController por pedido, con un deadline ABSOLUTO. El reintento por
+  // red comparte el mismo controller: aunque falle, nunca suma tiempo extra.
+  // Los timeouts NO se reintentan.
   private async request<T>(
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
     timeoutMs: number = this.timeoutMs,
   ): Promise<T> {
+    const limite = Math.max(0, Math.min(timeoutMs, this.timeoutMs));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), limite);
     let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const res = await fetch(`${this.baseUrl}${path}`, {
-          method,
-          headers: body ? { 'Content-Type': 'application/json' } : undefined,
-          body: body ? JSON.stringify(body) : undefined,
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          throw new Error(`Ollama HTTP ${res.status}: ${detail.slice(0, 300)}`);
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (controller.signal.aborted) throw new AiTimeoutError(limite);
+        try {
+          const res = await fetch(`${this.baseUrl}${path}`, {
+            method,
+            headers: body ? { 'Content-Type': 'application/json' } : undefined,
+            body: body ? JSON.stringify(body) : undefined,
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            throw new Error(`Ollama HTTP ${res.status}: ${detail.slice(0, 300)}`);
+          }
+          return (await res.json()) as T;
+        } catch (e) {
+          lastError = e;
+          if (controller.signal.aborted) throw new AiTimeoutError(limite);
+          // Sólo reintentamos fallos de red; 4xx/5xx ya obtuvieron respuesta.
+          if (!(e instanceof TypeError) || attempt === 1) throw e;
+          this.logger.warn(`Fallo de red con Ollama (${path}); reintentando una vez`);
         }
-        return (await res.json()) as T;
-      } catch (e) {
-        lastError = e;
-        const err = e as Error;
-        const retryable = err?.name === 'AbortError' || e instanceof TypeError;
-        if (!retryable || attempt === 1) throw e;
-        this.logger.warn(`Fallo de red con Ollama (${path}); reintentando una vez`);
-      } finally {
-        clearTimeout(timer);
       }
+      throw lastError ?? new AiTimeoutError(limite);
+    } finally {
+      clearTimeout(timer);
     }
-    throw lastError;
   }
 
   async chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult> {
@@ -104,7 +110,7 @@ export class OllamaAiProvider implements AiDiagnosticsProvider {
         temperature: opts.temperature ?? 0.2,
         num_predict: opts.maxTokens ?? (this.config.get<number>('ai.maxTokens') || 2048),
       },
-    });
+    }, opts.timeoutMs ?? this.timeoutMs);
 
     const promptTokens = Number(data.prompt_eval_count || 0);
     const completionTokens = Number(data.eval_count || 0);
@@ -149,7 +155,7 @@ export class OllamaAiProvider implements AiDiagnosticsProvider {
         temperature: opts.temperature ?? 0.2,
         num_predict: opts.maxTokens ?? 512,
       },
-    });
+    }, opts.timeoutMs ?? this.timeoutMs);
     const completionTokens = Number(data.eval_count || 0);
     const evalNs = Number(data.eval_duration || 0);
     const totalNs = Number(data.total_duration || 0);

@@ -285,6 +285,128 @@ Se cambiaron transitoriamente `AI_CHAT_PROVIDER` y `AI_EMBED_PROVIDER` a `mock` 
 
 Con Ollama apagado los mismos endpoints dieron 503 (sección 6.2), así que el cableado de flags, guards, métricas y base de datos está verificado de punta a punta.
 
-### 6.4 Pruebas en vivo con Ollama (completar al terminar la descarga de modelos)
+### 6.4 Pruebas en vivo con Ollama
 
-(completar)
+Ver secciones 7 y 8 (timeout real, comparación de modelos y textos devueltos).
+
+## 7. Límite de tiempo real (requerimiento B)
+
+- `ChatOptions.timeoutMs` se propaga desde `ai.chatTimeoutMs` (`AI_CHAT_TIMEOUT_MS`).
+- `OllamaAiProvider.request()` crea un `AbortController` por pedido con un único
+  `setTimeout` y deadline absoluto. El reintento por error de red comparte el
+  controller; los timeouts **no** se reintentan.
+- `AiService.guardedChat()` usa un solo reloj para la llamada y el reintento por
+  idioma: el reintento recibe sólo el tiempo restante. Si no queda presupuesto,
+  se lanza `AiTimeoutError` y la API responde 503 con el mensaje exacto
+  `La IA tardó demasiado, probá de nuevo`.
+- El evento se registra en `ai_usage_log` con `ok=false` y ese mismo
+  `error_message`.
+
+Prueba real con `AI_CHAT_TIMEOUT_MS=5000` en un backend temporal (puerto 4001).
+El `.env` **no** se tocó: sigue en `180000`.
+
+```text
+POST /api/ai/lab/chat  ->  503 en 5,07 s
+{"message":"La IA tardó demasiado, probá de nuevo","error":"Service Unavailable","statusCode":503}
+
+select count(*) from ai_usage_log where error_message='La IA tardó demasiado, probá de nuevo';
+1
+```
+
+## 8. Modelo sin razonamiento y comparación (requerimiento C)
+
+La librería de Ollama publica `qwen3:4b-instruct` (tag oficial, 2,5 GB, id
+`0edcdef34593`). Se bajó con `ollama pull qwen3:4b-instruct`. Es la variante
+instruct: `/api/show` reporta `capabilities=["tools","thinking","completion"]`,
+pero en la práctica no emite el razonamiento. Con el mismo prompt, `qwen3:4b`
+arrancó `"Okay, the user is asking... Let me think."` mientras que
+`qwen3:4b-instruct` respondió directamente en español.
+
+Comparación con el ticket real `TK-2026-40630` y el mismo prompt/payload:
+
+| Operación | qwen3:4b (configurado) | qwen3:4b-instruct | Mejora |
+|---|---:|---:|---:|
+| chat | 50,1 s | 6,3 s | ~8x |
+| resumen | 11,7 s | 10,7 s | ~1,1x |
+| clasificación | 10,8 s | 9,5 s | ~1,1x |
+
+El `.env` **no** se cambió: `AI_MODEL_FAST` y `AI_MODEL_SMART` siguen en
+`qwen3:4b`. La comparación se hizo con un backend temporal (puerto 4002) que
+sobrescribió sólo esas dos variables. Queda pendiente tu OK para cambiarlas.
+
+## 9. Texto exacto devuelto por el modelo (tickets reales)
+
+Se usaron tres tickets reales distintos. El campo `textoModelo` de la respuesta
+es lo que devolvió el modelo sin parsear ni prefijos de aviso.
+
+### qwen3:4b (modelo configurado actualmente)
+
+```text
+[RESUMEN TK-2026-40630]
+{
+  "pedido": "Respaldo de MikroTik CSM_4011 del 2026-10-16",
+  "probado": "No se especifica",
+  "falta": "Confirmar estado y prioridad del ticket",
+  "cliente": "Solicitó respuesta por email"
+}
+[CLASIFICACION TK-2026-40630]
+{
+  "categoria": "Red / Conectividad",
+  "prioridad": "normal",
+  "especialidad": "Redes",
+  "duracionEstimada": "2 horas",
+  "animo": "Con tranquilidad, lo resolvemos."
+}
+[RESUMEN TK-2026-40629]
+{
+  "pedido": "Restablecer el respaldo de MikroTik para Elisa",
+  "probado": "No se ha realizado ningún probado en el ticket",
+  "falta": "Confirmar el estado del respaldo y los detalles del problema",
+  "cliente": "Elisa"
+}
+[CLASIFICACION TK-2026-40629]
+{
+  "categoria": "Red / Conectividad",
+  "prioridad": "normal",
+  "especialidad": "Redes",
+  "duracionEstimada": "2 horas",
+  "animo": "Con tranquilidad, lo resolvemos."
+}
+[RESUMEN TK-2026-40626]
+{
+  "pedido": "SWA_LB Respaldo oct/15/2026",
+  "probado": "",
+  "falta": "",
+  "cliente": ""
+}
+[CLASIFICACION TK-2026-40626]
+{
+  "categoria": "Red / Conectividad",
+  "prioridad": "normal",
+  "especialidad": "Redes",
+  "duracionEstimada": "2 horas",
+  "animo": "Con tranquilidad, lo resolvemos."
+}
+```
+
+### qwen3:4b-instruct (candidato, aún sin activar)
+
+```text
+[RESUMEN TK-2026-40630]
+{"pedido":"Realizar respaldo del sistema MikroTik CSM 4011 del 16/10/2026","probado":"No se proporcionaron acciones probadas en el ticket","falta":"No se especifica el contenido o formato del respaldo requerido","cliente":"Solicitó respuesta por email"}
+[CLASIFICACION TK-2026-40630]
+{"categoria":"soporte","prioridad":"normal","especialidad":"Redes","duracionEstimada":"2 horas","animo":"Con tranquilidad, lo resolvemos."}
+[RESUMEN TK-2026-40629]
+{"pedido":"Realizar respaldo de la configuración de MikroTik para La Elisa el 16/10/2026","probado":"","falta":"","cliente":"La Elisa"}
+[CLASIFICACION TK-2026-40629]
+{"categoria":"soporte","prioridad":"normal","especialidad":"Redes","duracionEstimada":"2 horas","animo":"Con tranquilidad, lo resolvemos."}
+[RESUMEN TK-2026-40626]
+{"pedido":"Realizar respaldo del SWA_LB el 15 de octubre de 2026","probado":"","falta":"","cliente":""}
+[CLASIFICACION TK-2026-40626]
+{"categoria":"soporte","prioridad":"normal","especialidad":"Soporte General","duracionEstimada":"1 hora","animo":"Sin problema, lo atendemos con tranquilidad."}
+```
+
+Nota: las categorías devueltas por el modelo se validan contra la base antes de
+mostrarse en el campo `ai`; `textoModelo` conserva lo que el modelo escribió
+literalmente. En los ejemplos, `soporte` y `Red / Conectividad` existen en la BD,
+por lo que no se marcó `sin coincidencia`.

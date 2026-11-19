@@ -11,6 +11,17 @@ export interface ChatOptions {
   temperature?: number;
   numCtx?: number;
   maxTokens?: number;
+  // Presupuesto real de esta llamada (ms). El servicio lo achica en el reintento
+  // para que el total nunca supere AI_CHAT_TIMEOUT_MS.
+  timeoutMs?: number;
+}
+
+// Error controlado: el servicio lo traduce al mensaje de la interfaz.
+export class AiTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super('La IA tardó demasiado, probá de nuevo');
+    this.name = 'AiTimeoutError';
+  }
 }
 
 export interface UsageMetrics {

@@ -16,6 +16,7 @@ import { AiUsageService } from './ai-usage.service';
 import {
   AiDiagnosticsProvider,
   AiProvider,
+  AiTimeoutError,
   CHAT_PROVIDER,
   ChatMessage,
   ChatResult,
@@ -46,6 +47,8 @@ export interface ChatView {
   response: string;
   metrics: MetricsView;
   aviso?: string;
+  // Texto exacto devuelto por el modelo (sin el prefijo de aviso).
+  textoModelo: string;
 }
 
 // Arranca textualmente igual en TODOS los mensajes de sistema del módulo.
@@ -138,6 +141,9 @@ export class AiService implements OnModuleInit {
   }
 
   private unavailable(e: unknown): ServiceUnavailableException {
+    if (e instanceof AiTimeoutError) {
+      return new ServiceUnavailableException('La IA tardó demasiado, probá de nuevo');
+    }
     const detail = (e as Error)?.message || 'sin detalle';
     if (this.chatProvider.name === 'ollama' || this.embedProvider.name === 'ollama') {
       return new ServiceUnavailableException(`Ollama no disponible: ${detail}`);
@@ -251,6 +257,7 @@ export class AiService implements OnModuleInit {
     });
     return {
       response: aviso ? `${aviso}: ${result.text}` : result.text,
+      textoModelo: result.text,
       metrics: {
         tokensIn: result.usage.promptTokens,
         tokensOut: result.usage.completionTokens,
@@ -266,21 +273,46 @@ export class AiService implements OnModuleInit {
 
   // Resumen y clasificación necesitan un objeto, no prosa. Si el proveedor
   // tiene salida estructurada la usamos; si no, caemos al chat de siempre.
+  private async registrarFallo(
+    model: string,
+    userId: string | null,
+    feature: string,
+    errorMessage: string,
+  ): Promise<void> {
+    await this.usage.record({
+      userId,
+      feature,
+      provider: this.chatProvider.name,
+      model,
+      tokensIn: 0,
+      tokensOut: 0,
+      durationMs: 0,
+      tokensPerSecond: null,
+      ok: false,
+      errorMessage,
+    });
+  }
+
   private async callModel(
     messages: ChatMessage[],
     schema: JsonSchema | undefined,
     model: string,
+    timeoutMs?: number,
   ): Promise<ChatResult> {
+    // El deadline se propaga al proveedor; allí un AbortController corta el
+    // fetch aunque Ollama siga generando tokens.
+    const opts = { model, ...(timeoutMs === undefined ? {} : { timeoutMs }) };
     const generate = schema ? this.chatProvider.generateJson?.bind(this.chatProvider) : undefined;
     if (generate) {
       try {
         const prompt = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
-        return await generate(prompt, schema!, { model });
+        return await generate(prompt, schema!, opts);
       } catch (e) {
+        if (e instanceof AiTimeoutError) throw e;
         this.logger.warn(`Salida estructurada fallida; usando chat: ${(e as Error).message}`);
       }
     }
-    return this.chatProvider.chat(messages, { model });
+    return this.chatProvider.chat(messages, opts);
   }
 
   private reforzar(messages: ChatMessage[]): ChatMessage[] {
@@ -319,32 +351,33 @@ export class AiService implements OnModuleInit {
     feature: string,
   ): Promise<ChatView> {
     const model = modelOverride || this.cfg('ai.modelFast', 'qwen3:4b');
+    // Un único reloj para la llamada original y el reintento por idioma.
+    const presupuesto = Math.max(0, this.cfg('ai.chatTimeoutMs', 180000));
+    const inicio = Date.now();
     let result: ChatResult;
     try {
-      result = await this.callModel(messages, schema, model);
+      result = await this.callModel(messages, schema, model, presupuesto);
     } catch (e) {
-      await this.usage.record({
-        userId,
-        feature,
-        provider: this.chatProvider.name,
-        model,
-        tokensIn: 0,
-        tokensOut: 0,
-        durationMs: 0,
-        tokensPerSecond: null,
-        ok: false,
-        errorMessage: (e as Error).message,
-      });
+      await this.registrarFallo(model, userId, feature, (e as Error).message);
       throw this.unavailable(e);
     }
 
     let aviso: string | null = null;
     if (isProbablyEnglish(result.text)) {
+      const restante = presupuesto - (Date.now() - inicio);
+      if (restante <= 0) {
+        await this.registrarFallo(model, userId, feature, 'La IA tardó demasiado, probá de nuevo');
+        throw this.unavailable(new AiTimeoutError(presupuesto));
+      }
       try {
-        const reintento = await this.callModel(this.reforzar(messages), schema, model);
+        const reintento = await this.callModel(this.reforzar(messages), schema, model, restante);
         result = this.sumarUso(result, reintento);
         if (isProbablyEnglish(reintento.text)) aviso = AVISO_IDIOMA;
       } catch (e) {
+        if (e instanceof AiTimeoutError) {
+          await this.registrarFallo(model, userId, feature, e.message);
+          throw this.unavailable(e);
+        }
         aviso = `${AVISO_IDIOMA}; reintento en español falló: ${(e as Error).message}`;
       }
     }
@@ -558,6 +591,8 @@ export class AiService implements OnModuleInit {
     return {
       ticket: this.ticketSnapshot(ticket),
       summary,
+      // Texto exacto del modelo, sin parsear ni prefijos de aviso.
+      textoModelo: result.textoModelo,
       metrics: result.metrics,
       ...(result.aviso ? { aviso: result.aviso } : {}),
     };
@@ -612,6 +647,8 @@ export class AiService implements OnModuleInit {
       ticket: this.ticketSnapshot(ticket),
       ai,
       raw: parsed ? null : result.response.slice(0, 600),
+      // Texto exacto del modelo, sin parsear ni prefijos de aviso.
+      textoModelo: result.textoModelo,
       metrics: result.metrics,
       ...(result.aviso ? { aviso: result.aviso } : {}),
     };

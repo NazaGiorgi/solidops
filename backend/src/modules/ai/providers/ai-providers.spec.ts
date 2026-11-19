@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { AiTimeoutError } from '../ai.types';
 import { MockAiProvider } from './mock.provider';
 import { OllamaAiProvider } from './ollama.provider';
 
@@ -74,6 +75,31 @@ describe('OllamaAiProvider', () => {
     const result = await provider.chat([{ role: 'user', content: 'hola' }]);
     expect(result.text).toBe('ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborta el fetch con AbortController y NO reintenta el timeout', async () => {
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => {
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            reject(error);
+          });
+        }),
+    );
+    const provider = new OllamaAiProvider(config({ 'ai.chatTimeoutMs': 30 }));
+
+    let error: unknown;
+    try {
+      await provider.chat([{ role: 'user', content: 'hola' }], { timeoutMs: 20 });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(AiTimeoutError);
+    expect((error as Error).message).toBe('La IA tardó demasiado, probá de nuevo');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal?.aborted).toBe(true);
   });
 
   it('NO reintenta un error HTTP 404', async () => {
