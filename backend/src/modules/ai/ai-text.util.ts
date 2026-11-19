@@ -116,6 +116,17 @@ export function isProbablyEnglish(input: string): boolean {
   return en >= 2 && en > es;
 }
 
+// El modelo a veces explica la ausencia de datos en lugar de dejar el campo
+// vacío. Lo convertimos a "Sin datos" para que la salida sea consistente.
+const EXPLICACION_SIN_DATOS =
+  /^(?:no se (?:ha|haya)\s+)?(?:realizado|proporcionado|especificado|informado|hecho|indicado)\b|^no se especifica\b|^no se (?:proporciona|proporcionaron|indica|indican|informa|informan)\b|^no hay (?:informacion|datos)\b/;
+
+export function sinDatosSiCorresponde(value: unknown): string {
+  const texto = String(value ?? '').trim();
+  if (!texto) return '';
+  return EXPLICACION_SIN_DATOS.test(normalizeText(texto)) ? 'Sin datos' : texto;
+}
+
 // Los modelos chicos a veces devuelven JSON con texto alrededor o en code fence.
 export function extractJsonObject(text: string): Record<string, unknown> | null {
   const cleaned = stripThinkTags(text)

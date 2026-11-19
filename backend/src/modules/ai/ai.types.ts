@@ -49,9 +49,15 @@ export interface EmbedResult {
 
 // Salida con forma fija para resumen/clasificación. Los proveedores que no la
 // soportan simplemente no implementan generateJson y el servicio usa chat.
+export interface JsonSchemaProperty {
+  type: 'string' | 'number' | 'integer' | 'boolean';
+  enum?: string[];
+  description?: string;
+}
+
 export interface JsonSchema {
   type: 'object';
-  properties: Record<string, { type: 'string' | 'number' | 'boolean' }>;
+  properties: Record<string, JsonSchemaProperty>;
   required?: string[];
 }
 

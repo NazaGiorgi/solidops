@@ -30,6 +30,7 @@ import {
   firstValues,
   isProbablyEnglish,
   normalizeText,
+  sinDatosSiCorresponde,
   truncateForContext,
 } from './ai-text.util';
 
@@ -59,12 +60,17 @@ const AVISO_IDIOMA = 'respuesta en otro idioma';
 const SIN_COINCIDENCIA = 'sin coincidencia';
 
 const EJEMPLO_RESUMEN = [
-  'Ejemplo de resumen (formato esperado, un solo JSON válido):',
-  '{"pedido":"Restablecer la conexión a internet del equipo",' +
-    '"probado":"Reiniciar el modem y probar otro cable",' +
-    '"falta":"Confirmar si el problema persiste con otro proveedor",' +
-    '"cliente":"Solicitó respuesta por email"}',
+  'Ejemplo de resumen (solo muestra el formato; los valores son ficticios, no los copies):',
+  '{"pedido":"TEXTO_FICTICIO_DEL_PEDIDO",' +
+    '"probado":"Sin datos",' +
+    '"falta":"TEXTO_FICTICIO_DE_LO_QUE_FALTA",' +
+    '"cliente":"Sin datos"}',
 ].join('\n');
+
+const REGLA_SIN_DATOS =
+  'Si el ticket no tiene información para un campo, devolvé la cadena vacía "" o "Sin datos". ' +
+  'Nunca escribas frases explicativas como "No se ha realizado ningún probado" ' +
+  'ni "No se especifica".';
 
 function mensajeSistema(detalle: string): string {
   // El texto exigido va primero, el refuerzo siempre al final.
@@ -91,14 +97,23 @@ const SUMMARY_SCHEMA: JsonSchema = {
   required: ['pedido', 'probado', 'falta', 'cliente'],
 };
 
+const ANIMOS = ['tranquilo', 'apurado', 'molesto', 'preocupado', 'neutral'] as const;
+
 const CLASSIFY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     categoria: { type: 'string' },
     prioridad: { type: 'string' },
     especialidad: { type: 'string' },
-    duracionEstimada: { type: 'string' },
-    animo: { type: 'string' },
+    duracionEstimada: {
+      type: 'integer',
+      description: 'Duración estimada en minutos, como número entero',
+    },
+    animo: {
+      type: 'string',
+      enum: [...ANIMOS],
+      description: 'Estado de ánimo del cliente: una de las opciones permitidas',
+    },
   },
   required: ['categoria', 'prioridad', 'especialidad', 'duracionEstimada', 'animo'],
 };
@@ -514,6 +529,11 @@ export class AiService implements OnModuleInit {
     return conEtiquetaEspanola ? etiquetaPrioridad(encontrado) : encontrado;
   }
 
+  private minutos(valor: unknown): number | string {
+    const numero = Number(valor);
+    return Number.isFinite(numero) && numero >= 0 ? Math.round(numero) : 'Sin datos';
+  }
+
   private async ticketContext(id: string, actor: AuthenticatedUser) {
     const ticket = await this.tickets.findOne(id, actor);
     const messageBodies = [
@@ -561,6 +581,8 @@ export class AiService implements OnModuleInit {
         content: mensajeSistema(
           'Resumí el ticket en español de Argentina. Respondé SOLO un JSON válido con las claves ' +
             'pedido, probado, falta y cliente. No inventes datos que no estén en el ticket.\n\n' +
+            REGLA_SIN_DATOS +
+            '\n\n' +
             EJEMPLO_RESUMEN,
         ),
       },
@@ -576,10 +598,10 @@ export class AiService implements OnModuleInit {
     const parsed = extractJsonObject(result.response);
     const summary = parsed
       ? {
-          pedido: String(parsed.pedido ?? ''),
-          probado: String(parsed.probado ?? ''),
-          falta: String(parsed.falta ?? ''),
-          cliente: String(parsed.cliente ?? ''),
+          pedido: sinDatosSiCorresponde(parsed.pedido),
+          probado: sinDatosSiCorresponde(parsed.probado),
+          falta: sinDatosSiCorresponde(parsed.falta),
+          cliente: sinDatosSiCorresponde(parsed.cliente),
         }
       : {
           pedido: result.response.slice(0, 500),
@@ -602,13 +624,11 @@ export class AiService implements OnModuleInit {
     this.ensureEnabled();
     const { ticket, text } = await this.ticketContext(id, user);
     const opciones = await this.opcionesClasificacion();
-    const categoriaEjemplo = opciones.categorias[0] ?? 'Taller';
-    const prioridadEjemplo = etiquetaPrioridad(opciones.prioridades[0] ?? 'normal');
     const ejemploClasificacion = [
-      'Ejemplo de clasificación (formato esperado, un solo JSON válido):',
-      `{"categoria":"${categoriaEjemplo}","prioridad":"${prioridadEjemplo}",` +
-        '"especialidad":"Redes","duracionEstimada":"2 horas",' +
-        '"animo":"Con tranquilidad, lo resolvemos."}',
+      'Ejemplo de clasificación (solo muestra el formato; TODOS sus valores son ficticios, no los copies):',
+      '{"categoria":"CATEGORIA_FICTICIA","prioridad":"PRIORIDAD_FICTICIA",' +
+        '"especialidad":"ESPECIALIDAD_FICTICIA","duracionEstimada":123,' +
+        '"animo":"ANIMO_FICTICIO"}',
     ].join('\n');
     const messages: ChatMessage[] = [
       {
@@ -622,6 +642,10 @@ export class AiService implements OnModuleInit {
             `Prioridades existentes en SolidOps (leídas de la base): ${opciones.prioridades
               .map(etiquetaPrioridad)
               .join(', ')}.\n\n` +
+            `El campo "animo" debe ser UNO de: ${ANIMOS.join(', ')}. ` +
+            'El campo "duracionEstimada" es un número entero de minutos (por ejemplo 45).\n\n' +
+            REGLA_SIN_DATOS +
+            '\n\n' +
             `Si lo que inferís no coincide con esas listas, escribí "${SIN_COINCIDENCIA}" en ese campo.\n\n` +
             ejemploClasificacion,
         ),
@@ -641,6 +665,9 @@ export class AiService implements OnModuleInit {
           ...parsed,
           categoria: this.coincidirOpcion(parsed.categoria, opciones.categorias),
           prioridad: this.coincidirOpcion(parsed.prioridad, opciones.prioridades, true),
+          especialidad: sinDatosSiCorresponde(parsed.especialidad),
+          animo: this.coincidirOpcion(parsed.animo, [...ANIMOS]),
+          duracionEstimada: this.minutos(parsed.duracionEstimada),
         }
       : parsed;
     return {

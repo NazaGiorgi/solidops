@@ -259,7 +259,27 @@ describe('AiService', () => {
     expect(prompt).toContain('Sos un asistente de soporte técnico de SolidOps');
     expect(prompt).toContain('Ejemplo de resumen');
     expect(prompt).toContain('"pedido"');
+    expect(prompt).toContain('Sin datos');
+    expect(prompt).toContain('no los copies');
+    expect(prompt).toContain('Nunca escribas frases explicativas como "No se ha realizado ningún probado"');
     expect(prompt.trimEnd().endsWith('Respondé en español.')).toBe(true);
+  });
+
+  it('el resumen convierte explicaciones de "sin datos" devueltas por el modelo', async () => {
+    const proveedor = structuredProvider(
+      '{"pedido":"Reparar impresora","probado":"No se ha realizado ningún probado",' +
+        '"falta":"No se especifica si se instaló el repuesto","cliente":"Adriana"}',
+    );
+    const { service } = build(proveedor, embedProvider(3));
+    const resultado = await service.summarizeTicket('ticket-1', user);
+
+    expect(resultado.summary).toEqual({
+      pedido: 'Reparar impresora',
+      probado: 'Sin datos',
+      falta: 'Sin datos',
+      cliente: 'Adriana',
+    });
+    expect(resultado.textoModelo).toContain('No se ha realizado ningún probado');
   });
 
   it('clasificación valida categorías y prioridades contra los valores de la base', async () => {
@@ -295,6 +315,61 @@ describe('AiService', () => {
     const resultado = await service.classifyTicket('ticket-1', user);
 
     expect(resultado.ai).toMatchObject({ categoria: 'Taller', prioridad: 'crítica' });
+  });
+
+  it('el ejemplo de clasificación es ficticio y el schema cierra animo y minutos', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"normal","especialidad":"Redes","duracionEstimada":45,"animo":"tranquilo"}',
+    );
+    const filas = [[{ valor: 'Taller' }], [{ valor: 'normal' }]];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    await service.classifyTicket('ticket-1', user);
+
+    const prompt = (proveedor.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('CATEGORIA_FICTICIA');
+    expect(prompt).toContain('ANIMO_FICTICIO');
+    expect(prompt).toContain('"duracionEstimada":123');
+    expect(prompt).toContain('no los copies');
+    expect(prompt).not.toContain('Con tranquilidad, lo resolvemos.');
+    expect(prompt).not.toContain('"duracionEstimada":"2 horas"');
+    expect(prompt).toContain('tranquilo, apurado, molesto, preocupado, neutral');
+    expect(prompt).toContain('número entero de minutos');
+
+    const schema = (proveedor.generateJson as jest.Mock).mock.calls[0][1];
+    expect(schema.properties.animo.enum).toEqual([
+      'tranquilo',
+      'apurado',
+      'molesto',
+      'preocupado',
+      'neutral',
+    ]);
+    expect(schema.properties.duracionEstimada.type).toBe('integer');
+  });
+
+  it('normaliza animo y minutos aunque el proveedor devuelva texto libre', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"normal","especialidad":"Redes","duracionEstimada":"2 horas","animo":"Con tranquilidad, lo resolvemos."}',
+    );
+    const filas = [[{ valor: 'Taller' }], [{ valor: 'normal' }]];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({
+      animo: 'sin coincidencia',
+      duracionEstimada: 'Sin datos',
+    });
+    expect(resultado.textoModelo).toContain('2 horas');
+  });
+
+  it('acepta animo de la lista cerrada y duracion en minutos', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"normal","especialidad":"Redes","duracionEstimada":45,"animo":"apurado"}',
+    );
+    const filas = [[{ valor: 'Taller' }], [{ valor: 'normal' }]];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({ animo: 'apurado', duracionEstimada: 45 });
   });
 
   it('corta la llamada por timeout y muestra el mensaje exacto', async () => {

@@ -330,9 +330,9 @@ Comparación con el ticket real `TK-2026-40630` y el mismo prompt/payload:
 | resumen | 11,7 s | 10,7 s | ~1,1x |
 | clasificación | 10,8 s | 9,5 s | ~1,1x |
 
-El `.env` **no** se cambió: `AI_MODEL_FAST` y `AI_MODEL_SMART` siguen en
-`qwen3:4b`. La comparación se hizo con un backend temporal (puerto 4002) que
-sobrescribió sólo esas dos variables. Queda pendiente tu OK para cambiarlas.
+La comparación se hizo con un backend temporal (puerto 4002) que sobrescribió
+sólo esas dos variables. Con OK posterior se cambió el `.env` a
+`qwen3:4b-instruct` para `AI_MODEL_FAST` y `AI_MODEL_SMART` (ver sección 10).
 
 ## 9. Texto exacto devuelto por el modelo (tickets reales)
 
@@ -410,3 +410,141 @@ Nota: las categorías devueltas por el modelo se validan contra la base antes de
 mostrarse en el campo `ai`; `textoModelo` conserva lo que el modelo escribió
 literalmente. En los ejemplos, `soporte` y `Red / Conectividad` existen en la BD,
 por lo que no se marcó `sin coincidencia`.
+
+## 10. Activación de `qwen3:4b-instruct` y ejemplos no copiables
+
+Con OK del usuario se cambió `.env` (backup
+`backup/.env.pre-ejemplo-20261119-084410.bak`):
+
+```diff
+-AI_MODEL_FAST=qwen3:4b
+-AI_MODEL_SMART=qwen3:4b
++AI_MODEL_FAST=qwen3:4b-instruct
++AI_MODEL_SMART=qwen3:4b-instruct
+```
+
+Se recreó `ops-backend` para que el cambio tenga efecto. Verificado dentro del
+contenedor: `MODEL_FAST=qwen3:4b-instruct MODEL_SMART=qwen3:4b-instruct`.
+
+### 10.1 Cambios en prompts y schema
+
+- Los ejemplos ahora usan marcadores ficticios (`CATEGORIA_FICTICIA`,
+  `ANIMO_FICTICIO`, `duracionEstimada: 123`) y dicen explícitamente
+  “no los copies”. Ya no aparecen `2 horas` ni
+  `Con tranquilidad, lo resolvemos.`.
+- `animo` es una lista cerrada en el schema JSON:
+  `tranquilo, apurado, molesto, preocupado, neutral`.
+- `duracionEstimada` pasó a `integer` (minutos).
+- Regla `Sin datos`: si falta información se devuelve `""` o `Sin datos`.
+  Además, `sinDatosSiCorresponde()` normaliza frases del modelo como
+  `No se ha realizado ningún probado` o `No se especifica…` a `Sin datos` en
+  el campo parseado. `textoModelo` conserva lo que escribió el modelo.
+
+### 10.2 Prueba con tickets de personas (no avisos automáticos)
+
+Modelo activo: `qwen3:4b-instruct`. Se muestran `textoModelo` (exacto) y
+`PARSEADO` (normalizado). Todos los tickets son reales y distintos.
+
+#### TK-2026-40583 — entró por WhatsApp
+
+```text
+[RESUMEN | textoModelo]
+{"pedido":"No tengo internet / la red no anda","probado":"Sin datos","falta":"Sin datos","cliente":"Sin datos"}
+[CLASIFICACION | textoModelo]
+{"categoria":"Red / Conectividad","prioridad":"normal","especialidad":"","duracionEstimada":30,"animo":"neutral"}
+```
+
+Ticket real: `WhatsApp: Red / Conectividad` · estado `nuevo` · prioridad
+`normal` · categoría `Red / Conectividad` · sin técnico · 15 mensajes. Primer
+mensaje del cliente: “Hola, necesito ayuda con la red”; luego eligió “1” ante
+el menú automático (“No tengo internet / la red no anda”).
+
+#### TK-2026-40033 — mail con ida y vuelta
+
+```text
+[RESUMEN | textoModelo]
+{"pedido":"Adriana tiene problemas con su computadora: no abre archivos en PDF y se bloquea al conectar la impresora color. Se solicitó conexión remota mediante TeamViewer para diagnosticar el problema.","probado":"Se realizó conexión remota mediante TeamViewer y se solicitó reinicio de la máquina para evaluar el estado del sistema.","falta":"No se especifica si se realizaron acciones de limpieza o reparación en la computadora.","cliente":"Adriana"}
+[RESUMEN | PARSEADO]
+{"pedido":"Adriana tiene problemas con su computadora: no abre archivos en PDF y se bloquea al conectar la impresora color. Se solicitó conexión remota mediante TeamViewer para diagnosticar el problema.","probado":"Se realizó conexión remota mediante TeamViewer y se solicitó reinicio de la máquina para evaluar el estado del sistema.","falta":"Sin datos","cliente":"Adriana"}
+[CLASIFICACION | textoModelo]
+{"categoria":"soporte","prioridad":"normal","especialidad":"","duracionEstimada":45,"animo":"neutral"}
+```
+
+Ticket real: `computadora Adriana` · estado `cerrado` · prioridad `normal` ·
+categoría vacía · sin técnico · 16 mensajes. Mensaje inicial: “Podrían revisar
+la compu, estoy teniendo problemas, no abre los archivos en PDF, y se bloquea
+al conectar la impresora color.” Luego hay ida y vuelta con el técnico por
+TeamViewer.
+
+#### TK-2026-39593 — cerrado con 17 mensajes
+
+```text
+[RESUMEN | textoModelo]
+{"pedido":"Las casas de la granja en ruta 5 km 113, específicamente las de la red 'EMPLEADOS' y 'INTERNO LARRONDO', no tenían internet desde el viernes. Se realizó una configuración en el enlace para que el router Mikrotik detecte fallos y se reinicie automáticamente. Los técnicos verificaron que el problema ya fue resuelto y que ahora las casas funcionan correctamente.","probado":"Se realizó una configuración en el enlace que envía consultas al router Mikrotik; se verificó que las casas ya funcionan correctamente.","falta":"Sin datos","cliente":"Jorge Diaz"}
+[CLASIFICACION | textoModelo]
+{"categoria":"Red / Conectividad","prioridad":"normal","especialidad":"soporte","duracionEstimada":30,"animo":"tranquilo"}
+```
+
+Ticket real: `INTERNET CASAS GRANJA RUTA 5 KM 113 - INTERNO LARRONDO` · estado
+`cerrado` · prioridad `normal` · categoría vacía · sin técnico · 17 mensajes.
+Mensaje del cliente: “Me informa el encargado de la granja que no funciona
+internet en su casa aún.”
+
+#### TK-2026-38367 — cliente apurado
+
+```text
+[RESUMEN | textoModelo]
+{"pedido":"Se dejó de funcionar el transformador del monitor LG de preceptoría de secundaria. Se solicitó urgentemente su reemplazo, pero el proveedor no pudo suministrarlo. Se indicó que hay un transformador idéntico en el mercado libre, pero con diferencias en los cables.","probado":"Sin datos","falta":"No se especifica si se ha instalado o entregado el transformador con cables compatibles.","cliente":"Axel"}
+[RESUMEN | PARSEADO]
+{"pedido":"Se dejó de funcionar el transformador del monitor LG de preceptoría de secundaria. Se solicitó urgentemente su reemplazo, pero el proveedor no pudo suministrarlo. Se indicó que hay un transformador idéntico en el mercado libre, pero con diferencias en los cables.","probado":"Sin datos","falta":"Sin datos","cliente":"Axel"}
+[CLASIFICACION | textoModelo]
+{"categoria":"Red / Conectividad","prioridad":"normal","especialidad":"soporte","duracionEstimada":60,"animo":"preocupado"}
+```
+
+Ticket real: `Transformador d e monitor LG de secundaria preceptoría.` · estado
+`cerrado` · prioridad `normal` · categoría vacía · sin técnico · 11 mensajes.
+Mensaje del cliente: “dejo de funcionar el transformador del monitor LG de
+preceptoría. Lo necesitaríamos de manera urgente.”
+
+Los valores de `duracionEstimada` y `animo` ya no repiten el ejemplo:
+`30/neutral`, `45/neutral`, `30/tranquilo`, `60/preocupado`.
+
+### 10.3 Avisos automáticos vs. personas (sólo lectura)
+
+Sobre `tickets where deleted_at is null` (40.334 vigentes; 40.356 incluyendo
+borrados). Consulta de clasificación aproximada por origen/asunto y presence
+de mensajes de `cliente`:
+
+```sql
+with c as (
+  select case
+    when source in ('whatsapp','manual','portal')
+      or (source = 'email'
+          and exists (select 1 from ticket_messages m
+                      where m.ticket_id = t.id and m.author_type = 'cliente')
+          and subject_key !~* '(backup|respaldo|health|smart error|correcto|incorrecto|notificac|alerta|automat|tu ticket|encuesta|newsletter|amistad|novedades|starlink|mail delivery failed|verify your account|datos de prioridad|firma digital|actualizaci.n de precios|towebs|linkedin|facebook|active backup|copia de seguridad|mikrotik|proxmox|zfs|volumen|se ha cerrado incorrectamente|no puede conectarse|undelivered mail|nuevo inicio de sesi.n|sin capacidad|fault|error)')
+    then 'persona'
+    else 'automatico_o_sin_cliente'
+  end as tipo
+  from tickets t
+  where deleted_at is null
+)
+select tipo, count(*) from c group by tipo order by 2 desc;
+```
+
+Resultado:
+
+```text
+automatico_o_sin_cliente | 33701
+persona                 |  6633
+```
+
+Es una estimación por patrón: los correos de monitoreo que llegan con remitente
+“cliente” pueden quedar del lado de personas y algunos asuntos genéricos
+(“consulta”, “test”) del lado automático. No se modificó ninguna fila.
+
+### 10.4 Verificación
+
+`tsc --noEmit` limpio · Jest **4 suites / 41 tests, 0 fallos** · backend
+recreado y reiniciado · `AI_CHAT_TIMEOUT_MS=180000` sin cambios · datos
+intactos (`tickets=40356` totales, `mailboxes=7`).

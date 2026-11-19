@@ -5,6 +5,7 @@ import {
   firstValues,
   isProbablyEnglish,
   normalizeText,
+  sinDatosSiCorresponde,
   stripThinkTags,
   truncateForContext,
 } from './ai-text.util';
@@ -65,5 +66,13 @@ describe('AI text helpers', () => {
   it('normaliza opciones para comparar sin importar tildes ni mayúsculas', () => {
     expect(normalizeText('Crítica')).toBe(normalizeText('critica'));
     expect(normalizeText('Red / Conectividad')).toBe('red conectividad');
+  });
+
+  it('convierte explicaciones de ausencia de datos a "Sin datos"', () => {
+    expect(sinDatosSiCorresponde('No se ha realizado ningún probado')).toBe('Sin datos');
+    expect(sinDatosSiCorresponde('No se especifica si se instaló')).toBe('Sin datos');
+    expect(sinDatosSiCorresponde('No se proporcionaron acciones previas')).toBe('Sin datos');
+    expect(sinDatosSiCorresponde('')).toBe('');
+    expect(sinDatosSiCorresponde('No se conecta la impresora')).toBe('No se conecta la impresora');
   });
 });
