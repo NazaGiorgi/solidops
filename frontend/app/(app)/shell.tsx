@@ -20,7 +20,7 @@ interface NavItem {
   // Restrict to specific role names (used for the admin-only "Administración" item).
   roles?: string[];
   // Optional sub-links rendered as indented items under this entry.
-  children?: { href: string; label: string; perm?: string }[];
+  children?: { href: string; label: string; perm?: string; requiresAiLab?: boolean }[];
 }
 
 const NAV: NavItem[] = [
@@ -47,6 +47,7 @@ const NAV: NavItem[] = [
       { href: '/administracion/roles', label: 'Roles y permisos' },
       { href: '/administracion/configuracion', label: 'Configuración general' },
       { href: '/administracion/boxes', label: 'Boxes de tickets' },
+      { href: '/administracion/laboratorio-ia', label: 'Laboratorio de IA', requiresAiLab: true },
       { href: '/usuarios', label: 'Usuarios', perm: 'users:read' },
       { href: '/casillas', label: 'Casillas de correo', perm: 'users:read' },
     ],
@@ -135,6 +136,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [trayGroups, setTrayGroups] = useState<TrayGroup[]>([]);
   const [ticketGroups, setTicketGroups] = useState<TicketGroup[]>([]);
   const [savedViews, setSavedViews] = useState<TrayView[]>([]);
+  // El laboratorio de IA se oculta salvo que el backend lo habilite (flag de
+  // servidor) y el usuario sea Administrador. /features no toca Ollama.
+  const [aiLabEnabled, setAiLabEnabled] = useState(false);
+  useEffect(() => {
+    if (!user || user.role !== 'Administrador') {
+      setAiLabEnabled(false);
+      return;
+    }
+    api
+      .get<{ aiLabEnabled: boolean }>('/ai/features')
+      .then((f) => setAiLabEnabled(f?.aiLabEnabled === true))
+      .catch(() => setAiLabEnabled(false));
+  }, [user]);
   const [soundOn, setSoundOn] = useState(isSoundEnabled());
   useEffect(() => subscribeSound(() => setSoundOn(isSoundEnabled())), []);
   // Colapso del árbol de bandejas: se hidrata desde localStorage en un useEffect
@@ -265,7 +279,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {n.children && (
                 <div className="sidebar-sub">
                   {n.children
-                    .filter((c) => !c.perm || hasPerm(c.perm))
+                    .filter((c) => (!c.perm || hasPerm(c.perm)) && (!c.requiresAiLab || aiLabEnabled))
                     .map((c) => {
                       const cActive = pathname.startsWith(c.href);
                       return (

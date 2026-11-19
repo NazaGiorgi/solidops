@@ -14,6 +14,7 @@ out/
 .env
 .env.local
 .env.prod
+.env.pre-ia
 !.env.example
 
 # OS

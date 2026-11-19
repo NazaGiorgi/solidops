@@ -63,6 +63,21 @@ interface EnvConfig {
   frontendUrl: string;
   corsOrigins: string[];
   runSeed: boolean;
+  // IA local (Ollama). Todo desactivado por default: el sistema arranca igual
+  // aunque no haya servidor de IA ni variables configuradas.
+  ai: {
+    enabled: boolean;
+    labEnabled: boolean;
+    chatProvider: string;
+    embedProvider: string;
+    ollamaUrl: string;
+    modelFast: string;
+    modelSmart: string;
+    embedModel: string;
+    embedDim: number;
+    numCtx: number;
+    chatTimeoutMs: number;
+  };
 }
 
 export default (): EnvConfig => {
@@ -145,5 +160,18 @@ export default (): EnvConfig => {
       .map((s) => s.trim())
       .filter(Boolean),
     runSeed: process.env.RUN_SEED === 'true',
+    ai: {
+      enabled: process.env.AI_ENABLED === 'true',
+      labEnabled: process.env.AI_LAB_ENABLED === 'true',
+      chatProvider: process.env.AI_CHAT_PROVIDER || 'ollama',
+      embedProvider: process.env.AI_EMBED_PROVIDER || 'ollama',
+      ollamaUrl: process.env.OLLAMA_URL || 'http://ollama:11434',
+      modelFast: process.env.AI_MODEL_FAST || 'qwen3:4b',
+      modelSmart: process.env.AI_MODEL_SMART || 'qwen3:4b',
+      embedModel: process.env.AI_EMBED_MODEL || 'bge-m3',
+      embedDim: parseInt(process.env.AI_EMBED_DIM || '1024', 10),
+      numCtx: parseInt(process.env.AI_OLLAMA_NUM_CTX || '8192', 10),
+      chatTimeoutMs: parseInt(process.env.AI_CHAT_TIMEOUT_MS || '180000', 10),
+    },
   };
 };

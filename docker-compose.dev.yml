@@ -86,6 +86,41 @@ services:
     networks:
       - msp_net
 
+  # Ollama LOCAL (sólo Docker Desktop, no Proxmox). Perfil "ai": quien no usa
+  # IA levanta el compose normal y este servicio NO existe.
+  #   docker compose -f docker-compose.dev.yml --profile ai up -d
+  ollama:
+    image: ollama/ollama:0.40.16
+    container_name: ops-ollama
+    restart: unless-stopped
+    profiles: ["ai"]
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    # Sin publicar: el backend lo alcanza por msp_net en http://ollama:11434.
+    # Si querés probar desde Windows, descomentá SOLO el loopback:
+    # ports:
+    #   - "127.0.0.1:11434:11434"
+    # GPU NVIDIA (RTX 3060): descomentar si Docker Desktop tiene GPU support.
+    # Por defecto corre en CPU.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    networks:
+      - msp_net
+
   backend:
     build:
       context: ./backend
@@ -112,6 +147,11 @@ services:
       # [DIAG] Guardar el MIME RAW real descargado por IMAP en debug/imap-raw/*.eml.
       # Poner a "1" SOLO para diagnosticar un email concreto; "0" la desactiva.
       IMAP_DEBUG_RAW: "0"
+      # Safety local mientras se prueba IA con datos reales: override de .env.
+      # Evita envíos de WhatsApp y congela el worker IMAP sin tocar la BD.
+      WHATSAPP_ACCESS_TOKEN: ""
+      WHATSAPP_PHONE_NUMBER_ID: ""
+      MAILBOX_WORKER_ENABLED: "false"
     volumes:
       - ./backend:/app
       - backend_node_modules:/app/node_modules
@@ -159,6 +199,7 @@ volumes:
   minio_data:
   backend_node_modules:
   frontend_node_modules:
+  ollama_models:
 
 networks:
   msp_net:

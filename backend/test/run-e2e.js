@@ -14,10 +14,16 @@ process.env.E2E_ALLOW_DB = allowDb;
 process.env.E2E_ADMIN_EMAIL = adminEmail;
 process.env.E2E_ADMIN_PASSWORD = adminPassword;
 
-const jestPath = path.resolve(__dirname, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'jest.cmd' : 'jest');
+// Invocamos el CLI JS de jest con el mismo node en vez del wrapper .cmd de
+// Windows: Node 20+ no permite spawn directo de .cmd (EINVAL) y con shell:true
+// se rompen las rutas con espacios como "D:\Sistema de Tickets Agenda".
+const jestPath = path.resolve(__dirname, '..', 'node_modules', 'jest', 'bin', 'jest.js');
 const jestArgs = ['--config', path.resolve(__dirname, 'jest-e2e.json')];
 
-const child = spawn(jestPath, jestArgs, { stdio: 'inherit', env: process.env });
+const child = spawn(process.execPath, [jestPath, ...jestArgs], {
+  stdio: 'inherit',
+  env: process.env,
+});
 
 child.on('close', (code) => {
   process.exit(code);

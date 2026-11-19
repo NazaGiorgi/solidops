@@ -35,6 +35,7 @@ import { NotesModule } from './modules/notes/notes.module';
 import { WorkshopModule } from './modules/workshop/workshop.module';
 import { TicketGroupsModule } from './modules/ticket-groups/ticket-groups.module';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
+import { AiModule } from './modules/ai/ai.module';
 
 // Entities auto-loaded by TypeORM via autoLoadEntities + glob in dbConfig.
 
@@ -72,6 +73,7 @@ NotesModule,
 WorkshopModule,
 TicketGroupsModule,
 WhatsappModule,
+AiModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

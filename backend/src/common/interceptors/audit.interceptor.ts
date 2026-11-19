@@ -42,6 +42,9 @@ export class AuditInterceptor implements NestInterceptor {
     'tasks',
     'mailboxes',
     'mailbox-rules',
+    // El laboratorio de IA es de sólo lectura: no queremos filas de auditoría
+    // por cada prueba (su propio ai_usage_log ya registra el uso).
+    'ai',
   ]);
 
   intercept(ctx: ExecutionContext, next: CallHandler): Observable<unknown> {

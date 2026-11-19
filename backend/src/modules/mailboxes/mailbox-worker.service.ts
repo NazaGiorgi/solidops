@@ -37,6 +37,13 @@ export class MailboxWorker {
 
   @Cron('*/1 * * * *')
   async pollAll() {
+    // Safety switch local (ej. mientras se prueba IA con datos reales): permite
+    // congelar TODA la actividad IMAP sin tocar las casillas de la base.
+    // Si la variable no está definida, el worker sigue funcionando igual.
+    if (process.env.MAILBOX_WORKER_ENABLED === 'false') {
+      this.logger.warn('Worker de casillas pausado (MAILBOX_WORKER_ENABLED=false)');
+      return;
+    }
     const mailboxes = await this.service.activeMailboxesForWorker();
     if (mailboxes.length === 0) {
       this.logger.log('Sin casillas activas; worker omitido');
