@@ -90,9 +90,10 @@ services:
   # IA levanta el compose normal y este servicio NO existe.
   #   docker compose -f docker-compose.dev.yml --profile ai up -d
   ollama:
-    # 0.6.8 trae cuda_v11 (este driver es 511.65 / CUDA 11.6) y soporta qwen3.
-    # 0.40.16 sólo trae cuda_v12/v13; 0.6.5 trae cuda_v11 pero no carga qwen3.
-    image: ollama/ollama:0.6.8
+    # 0.9.2 es la versión más nueva que aún trae cuda_v11 (driver 511.65 /
+    # CUDA 11.6) y carga qwen3. 0.40.16 (stable actual) sólo trae cuda_v12/v13
+    # y aquí cae a CPU; 0.6.5 trae cuda_v11 pero no soporta qwen3.
+    image: ollama/ollama:0.9.2
     container_name: ops-ollama
     restart: unless-stopped
     profiles: ["ai"]
@@ -103,9 +104,9 @@ services:
       OLLAMA_NUM_PARALLEL: "1"
       # 6 GB de VRAM: cargar 4B y 8B a la vez no entra. Uno por vez.
       OLLAMA_MAX_LOADED_MODELS: "1"
-      # Con 8192 tokens el modelo no cabe en 6 GB y Ollama lo deja en CPU.
-      # 2048 alcanza para el prompt y deja 4B/8B en GPU.
-      OLLAMA_CONTEXT_LENGTH: "2048"
+      # qwen3:4b-instruct con 8192 tokens usa ~5,1 GB y queda 100% en GPU.
+      # El pedido manda num_ctx=8192; esto sólo fija el default del servidor.
+      OLLAMA_CONTEXT_LENGTH: "8192"
     volumes:
       - ollama_models:/root/.ollama
     healthcheck:

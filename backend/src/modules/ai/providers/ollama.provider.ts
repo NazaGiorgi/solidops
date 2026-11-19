@@ -142,7 +142,9 @@ export class OllamaAiProvider implements AiDiagnosticsProvider {
     opts: ChatOptions = {},
   ): Promise<ChatResult> {
     const model = opts.model || this.config.get<string>('ai.modelSmart') || 'qwen3:4b';
-    const numCtx = Math.min(opts.numCtx || this.config.get<number>('ai.numCtx') || 8192, 2048);
+    // El pedido manda num_ctx (8192 por configuración). El techo evita que un
+    // override accidental exceda lo que cabe en 6 GB de VRAM.
+    const numCtx = Math.min(opts.numCtx || this.config.get<number>('ai.numCtx') || 8192, 8192);
     const started = Date.now();
     const data = await this.request<OllamaGenerateResponse>('POST', '/api/generate', {
       model,

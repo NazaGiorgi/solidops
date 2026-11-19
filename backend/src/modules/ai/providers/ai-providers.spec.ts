@@ -67,6 +67,31 @@ describe('OllamaAiProvider', () => {
     });
   });
 
+  it('generateJson usa el mismo num_ctx del pedido (8192) y formato JSON', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({
+        response: '{"categoria":"Taller"}',
+        prompt_eval_count: 40,
+        eval_count: 8,
+      }),
+    );
+    const provider = new OllamaAiProvider(config());
+    await provider.generateJson('clasificá', {
+      type: 'object',
+      properties: { categoria: { type: 'string' } },
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://ollama:11434/api/generate');
+    expect(JSON.parse(init.body)).toMatchObject({
+      model: 'qwen3:4b',
+      stream: false,
+      think: false,
+      format: { type: 'object' },
+      options: { num_ctx: 8192, temperature: 0.2 },
+    });
+  });
+
   it('reintenta una vez ante error de red', async () => {
     fetchMock
       .mockRejectedValueOnce(new TypeError('fetch failed'))

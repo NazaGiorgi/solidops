@@ -597,10 +597,10 @@ export class AiService implements OnModuleInit {
       'El campo "cliente" del resumen debe copiar literalmente el Contacto real; si no hay contacto, el Cliente real. No lo adivines del texto.',
       ...messageBodies,
     ];
-    // Con num_ctx=8192 se mandaban ~24 KB de ticket y qwen3 (que no puede
-    // desactivar el razonamiento) tardaba minutos en CPU. Acotamos el contexto
-    // del resumen/clasificación sin tocar el num_ctx del proveedor.
-    const contextTokens = Math.min(this.cfg('ai.numCtx', 8192), 2048);
+    // El contexto del prompt acompaña al num_ctx del proveedor (8192). Con
+    // qwen3:4b-instruct en GPU caben los 17 mensajes de un ticket largo sin
+    // recortar; el techo evita overrides que no entren en 6 GB de VRAM.
+    const contextTokens = Math.min(this.cfg('ai.numCtx', 8192), 8192);
     return {
       ticket,
       text: truncateForContext(parts.join('\n\n'), contextTokens),

@@ -559,37 +559,65 @@ Es una estimación por patrón: los correos de monitoreo que llegan con remitent
 se tocó en esta etapa: sigue con `AI_MODEL_FAST=AI_MODEL_SMART=qwen3:4b-instruct`
 y `AI_CHAT_TIMEOUT_MS=180000` (cambio anterior autorizado, sección 10).
 
+Antes del segundo cambio (versión 0.9.2 + contexto 8192) se hicieron estos
+backups:
+
+| Archivo | Tamaño | Fecha | SHA256 |
+|---|---:|---|---|
+| `backup/docker-compose.dev.yml.pre-contexto-8192-20261119-102222.bak` | 6139 B | 2026-11-19 09:54:37 | `07D65116D74C677A44A17D2C1B6AD085C445BBE9A86A680E933420B394B21EFA` |
+| `backup/ollama.provider.ts.pre-contexto-8192-20261119-102222.bak` | 7183 B | 2026-11-19 08:31:43 | `78D5680992BF5BCE4712C91647FD1ABE6C95AE30DFF6FD06BA41DAB51A71FC8E` |
+| `backup/ai.service.ts.pre-contexto-8192-20261119-102222.bak` | 30190 B | 2026-11-19 09:44:46 | `6219F142DB6C9BDB20793BD7176472991AF3F8A97ABB20921B67F595864F5B9F` |
+| `backup/ai.service.spec.ts.pre-contexto-8192-20261119-102222.bak` | 23250 B | 2026-11-19 09:45:32 | `5BC225CD19C2311D277FA77107E6AD0866DBBCE5ADE65E3ED7A376345C54C78B` |
+| `backup/IA-OLLAMA.md.pre-contexto-8192-20261119-102222.bak` | 36059 B | 2026-11-19 10:05:51 | `589799DEC48A56723670C5209CCD0084BD1023BF1029EFFBFC839818AFC6EF57` |
+
 ### 11.2 GPU: cambio y evidencia
 
 En `docker-compose.dev.yml` se activó el bloque `deploy.resources.reservations.devices`
 con `driver: nvidia`, `count: all`, `capabilities: [gpu]`, más
 `NVIDIA_VISIBLE_DEVICES=all`, `CUDA_VISIBLE_DEVICES=0`,
-`OLLAMA_MAX_LOADED_MODELS=1` y `OLLAMA_CONTEXT_LENGTH=2048`.
+`OLLAMA_MAX_LOADED_MODELS=1` y `OLLAMA_CONTEXT_LENGTH=8192`.
 
-La imagen pasó de `ollama/ollama:0.40.16` a `ollama/ollama:0.6.8`:
+### ¿Por qué no `0.40.16`?
 
-- `0.40.16` sólo trae `cuda_v12`/`cuda_v13`; este host tiene driver 511.65 / CUDA 11.6 y no inicializa esos runtimes.
+`0.40.16` es la **stable más nueva** (09/11/2026), pero en este host no puede
+usar GPU:
+
+- Sólo trae `cuda_v12`/`cuda_v13`; el driver es 511.65 / CUDA 11.6.
+- Se probó además un contenedor temporal con `--gpus all` y `OLLAMA_VULKAN=1`:
+  Ollama informó `inference compute id=cpu library=cpu` (Vulkan no está
+  disponible para el contenedor en Docker Desktop/WSL2 con este driver WDDM).
 - `0.6.5` trae `cuda_v11` pero no carga la arquitectura `qwen3`.
-- `0.6.8` trae `cuda_v11` **y** soporta `qwen3`.
 
-`OLLAMA_CONTEXT_LENGTH=2048` es necesario con 6 GB de VRAM: con 8192 tokens
-Ollama descargaba el modelo a CPU. Con 2048 alcanza el prompt completo.
+La imagen final es `ollama/ollama:0.9.2`, la **versión más nueva que aún incluye
+`cuda_v11`** y soporta `qwen3` (el commit que vuelve a quitar `cuda_v11` es posterior
+a esta tag). Es más nueva que el `0.6.8` usado en el primer intento y evita el
+downgrade innecesario a `0.6.8`.
 
-Evidencia dentro de `ops-ollama`:
+### Contexto real: pedido vs. entorno
+
+- `OLLAMA_CONTEXT_LENGTH` del compose es el **default del servidor**.
+- El pedido manda `options.num_ctx`; cuando lo hace, **gana el pedido**.
+- `chat()` ya mandaba `num_ctx=8192` desde `ai.numCtx` (`AI_OLLAMA_NUM_CTX`,
+  default 8192).
+- `generateJson()` —que es lo que usan resumen y clasificación— tenía un cap
+  interno a 2048 que sí ganaba al pedido. Ese cap se subió a 8192 en
+  `ollama.provider.ts`, y el recorte del prompt en `ai.service.ts` pasó de
+  2048 a 8192 tokens. Ahora ambos son 8192.
+
+Con `qwen3:4b-instruct` y 8192 tokens el modelo entra en la GPU:
 
 ```text
-docker exec ops-ollama nvidia-smi
-NVIDIA-SMI 510.47.03    Driver Version: 511.65    CUDA Version: 11.6
-GPU 0  NVIDIA GeForce RTX 3060 Laptop GPU   353MiB / 6144MiB
-
 docker logs ops-ollama
 msg="inference compute" id=GPU-… library=cuda variant=v11 compute=8.6
 driver=11.6 name="NVIDIA GeForce RTX 3060 Laptop GPU"
 total="6.0 GiB" available="5.0 GiB"
+load_tensors: offloading 37/37 layers to GPU
 
 docker exec ops-ollama ollama ps
-qwen3:4b-instruct  3.5 GB  100% GPU
-qwen3:8b           6.0 GB  11%/89% CPU/GPU
+qwen3:4b-instruct  0edcdef34593  5.1 GB  100% GPU  24 hours from now
+
+docker exec ops-ollama nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
+NVIDIA GeForce RTX 3060 Laptop GPU, 4787 MiB, 6144 MiB
 ```
 
 Nota operativa: el motor de Docker Desktop empezó a responder `500 Internal Server
@@ -629,12 +657,20 @@ Mismos 4 tickets reales, mismo prompt, mismo código, `think:false`, sin tocar
 `.env` (backend temporal en puerto 4002 con override de modelo). Tiempos en
 segundos medidos de punta a punta desde HTTP.
 
-| Ticket | 4b-instruct | 8b | Diferencia |
-|---|---:|---:|---:|
-| TK-2026-40583 | 0,97 s | 59,77 s | ~61x |
-| TK-2026-40033 | 2,16 s | 102,84 s | ~48x |
-| TK-2026-39593 | 1,42 s | 70,81 s | ~50x |
-| TK-2026-38367 | 1,05 s | 129,21 s | ~123x |
+Los tiempos finales son con `ollama/ollama:0.9.2`, `num_ctx=8192` y el modelo
+100% en GPU:
+
+| Ticket | 4b-instruct (0.9.2 / 8192) | 8b (medición anterior, 0.6.8 / 2048) |
+|---|---:|---:|
+| TK-2026-40583 | 5,79 s | 59,77 s |
+| TK-2026-40033 | 9,88 s | 102,84 s |
+| TK-2026-39593 | 8,82 s | 70,81 s |
+| TK-2026-38367 | 6,33 s | 129,21 s |
+
+La columna del 8b es histórica y no es estrictamente comparable: se midió antes
+del cambio de versión/contexto. El 8b con 8192 no entra en 6 GB; la comparación
+sigue sirviendo para descartarlo. El 4b con 8192 es más lento que con 2048, pero
+sigue entre 5 y 10 s y mantiene el modelo 100% en GPU.
 
 Clasificaciones (`ai` parseado, 4b-instruct):
 
@@ -680,20 +716,37 @@ TK-2026-38367  cliente="preceptoria sec -"    (BD: Clientes particulares / prece
 
 Ya no aparece `Axel` como cliente: era un mensaje del equipo mal atribuido.
 
+Con `num_ctx=8192` se repitió el resumen de `TK-2026-39593` (17 mensajes).
+Métricas reales: `tokensIn=1583`, `tokensOut=210`, `22,07 s`,
+`qwen3:4b-instruct`. El texto tiene 5018 caracteres (54 de título/descripción +
+4964 de mensajes), por debajo del límite de 24576 caracteres que permite el
+contexto nuevo, así que **no hubo truncamiento**. El resumen incluye información
+que aparece tarde en el hilo:
+
+```text
+pedido: "...El equipo informó que el problema fue solucionado el día anterior,
+aunque el cliente reportó que aún no funcionaba en la casa de Carlos Larrondo.
+Se solicitó a Jorge Diaz para coordinar el seguimiento, pero no se recibió
+respuesta. El equipo no pudo enviar correo a iruanyak@gmail.com por error de
+resolución de nombres."
+falta: "No se confirmó que el internet funcione correctamente en la casa de
+Carlos Larrondo, ni se recibió respuesta del casero Jorge Diaz para coordinar
+el seguimiento. El correo a iruanyak@gmail.com no fue enviado por error de
+resolución de nombres."
+cliente: "iruanyak@gmail.com"
+```
+
 ### 11.6 Verificación final
 
 ```text
 backend npx tsc --noEmit -p tsconfig.json  → sin errores
-backend npx jest --runInBand src/modules/ai → 4 suites, 45 tests, 0 fallos
+backend npx jest --runInBand src/modules/ai → 4 suites, 46 tests, 0 fallos
 select count(*) from tickets   → 40356
 select count(*) from mailboxes → 7
 ```
 
 No se modificaron tickets, clientes, contactos ni mensajes. Las únicas escrituras
 nuevas son métricas en `ai_usage_log` generadas por las llamadas HTTP de prueba.
-
-### 10.4 Verificación
-
-`tsc --noEmit` limpio · Jest **4 suites / 41 tests, 0 fallos** · backend
-recreado y reiniciado · `AI_CHAT_TIMEOUT_MS=180000` sin cambios · datos
-intactos (`tickets=40356` totales, `mailboxes=7`).
+`.env` sigue con `AI_MODEL_FAST=AI_MODEL_SMART=qwen3:4b-instruct` y
+`AI_CHAT_TIMEOUT_MS=180000`; los overrides de modelo se hicieron sólo en el
+backend temporal, nunca en el archivo.
