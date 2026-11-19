@@ -7,6 +7,10 @@ export function stripThinkTags(input: string): string {
   return input
     .replace(/<think[\s\S]*?<\/think>/gi, '')
     .replace(/<think>[\s\S]*$/i, '')
+    // qwen3:4b suele emitir el razonamiento SIN la etiqueta de apertura pero
+    // con el cierre (p.ej. "...llo.</think>\n\nrespuesta"). Sin este recorte el
+    // razonamiento se filtra al usuario aunque think:false vaya en la request.
+    .replace(/^[\s\S]*?<\/think>/i, '')
     .trim();
 }
 
@@ -58,6 +62,58 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 export function firstValues(values: number[], count = 5): number[] {
   return values.slice(0, count).map((v) => Number(v.toFixed(6)));
+}
+
+// Normaliza para comparar opciones ("Crítica" == "critica" == "CRITICA").
+export function normalizeText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+const PALABRAS_ES = new Set([
+  'de', 'del', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o', 'que',
+  'con', 'por', 'para', 'en', 'al', 'se', 'su', 'sus', 'mi', 'tu', 'nos', 'me', 'te',
+  'es', 'son', 'soy', 'esta', 'este', 'estos', 'estas', 'no', 'si', 'pero', 'como',
+  'cuando', 'donde', 'quien', 'cual', 'mas', 'menos', 'muy', 'tambien', 'ya', 'debe',
+  'responder', 'respuesta', 'respondé', 'argentina', 'claro', 'breve', 'asistente',
+  'soporte', 'tecnico', 'ticket', 'cliente', 'equipo', 'red', 'impresora', 'hola',
+  'ayuda', 'necesita', 'problema', 'solucion', 'paso', 'reiniciar', 'revisar', 'estado',
+  'nuevo', 'normal', 'alta', 'baja', 'critica', 'categoria', 'prioridad', 'especialidad',
+  'duracion', 'estimada', 'animo', 'pedido', 'probado', 'falta', 'sirve', 'gracias',
+]);
+
+const PALABRAS_EN = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'of', 'to', 'in', 'on', 'at',
+  'for', 'with', 'from', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'this', 'that',
+  'these', 'those', 'it', 'its', 'you', 'your', 'we', 'our', 'they', 'their', 'he',
+  'she', 'have', 'has', 'had', 'do', 'does', 'did', 'can', 'could', 'should', 'would',
+  'will', 'may', 'might', 'must', 'need', 'needs', 'want', 'wants', 'ask', 'asked',
+  'answer', 'response', 'provide', 'based', 'given', 'however', 'therefore', 'not',
+  'yes', 'okay', 'let', 'me', 'user', 'query', 'question', 'device', 'router', 'printer',
+  'help', 'please', 'first', 'next', 'finally', 'summary', 'classify', 'category',
+  'priority', 'estimate', 'output', 'only', 'valid', 'json', 'single', 'sentence',
+]);
+
+// Heurística conservadora: sólo marcamos "otro idioma" cuando hay al menos dos
+// palabras funcionales inglesas y superan a las españolas. Los acentos y ¿/¡
+// descartan el inglés de entrada, y las respuestas muy cortas no se marcan.
+export function isProbablyEnglish(input: string): boolean {
+  const text = stripThinkTags(input).toLowerCase();
+  if (/[áéíóúñü¿¡]/.test(text)) return false;
+  const words = text.match(/[a-z]+/g) || [];
+  let es = 0;
+  let en = 0;
+  for (const palabra of words) {
+    const variantes = [palabra];
+    if (palabra.length > 3 && palabra.endsWith('s')) variantes.push(palabra.slice(0, -1));
+    if (variantes.some((v) => PALABRAS_ES.has(v))) es += 1;
+    if (variantes.some((v) => PALABRAS_EN.has(v))) en += 1;
+  }
+  return en >= 2 && en > es;
 }
 
 // Los modelos chicos a veces devuelven JSON con texto alrededor o en code fence.

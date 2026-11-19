@@ -3,6 +3,8 @@ import {
   cosineSimilarity,
   extractJsonObject,
   firstValues,
+  isProbablyEnglish,
+  normalizeText,
   stripThinkTags,
   truncateForContext,
 } from './ai-text.util';
@@ -11,6 +13,10 @@ describe('AI text helpers', () => {
   it('saca bloques <think> aunque el modelo los devuelva', () => {
     expect(stripThinkTags('<think>no mostrar</think>Respuesta final')).toBe('Respuesta final');
     expect(stripThinkTags('Respuesta final<think>sin cerrar')).toBe('Respuesta final');
+  });
+
+  it('saca el razonamiento cuando qwen3 cierra </think> sin abrir', () => {
+    expect(stripThinkTags('Okay, déjame pensar...\n</think>\n\nhola')).toBe('hola');
   });
 
   it('limpia firmas y texto citado de un email', () => {
@@ -47,5 +53,17 @@ describe('AI text helpers', () => {
     const parsed = extractJsonObject('Clasificación:\n```json\n{"categoria":"Redes"}\n```\nEspero que sirva.');
     expect(parsed).toEqual({ categoria: 'Redes' });
     expect(extractJsonObject('sin json')).toBeNull();
+  });
+
+  it('detecta respuestas en inglés y respeta el español con acentos', () => {
+    expect(isProbablyEnglish('The switch connects devices on the network.')).toBe(true);
+    expect(isProbablyEnglish('El switch conecta dispositivos de red.')).toBe(false);
+    expect(isProbablyEnglish('La prioridad es crítica.')).toBe(false);
+    expect(isProbablyEnglish('hola')).toBe(false);
+  });
+
+  it('normaliza opciones para comparar sin importar tildes ni mayúsculas', () => {
+    expect(normalizeText('Crítica')).toBe(normalizeText('critica'));
+    expect(normalizeText('Red / Conectividad')).toBe('red conectividad');
   });
 });

@@ -136,18 +136,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [trayGroups, setTrayGroups] = useState<TrayGroup[]>([]);
   const [ticketGroups, setTicketGroups] = useState<TicketGroup[]>([]);
   const [savedViews, setSavedViews] = useState<TrayView[]>([]);
-  // El laboratorio de IA se oculta salvo que el backend lo habilite (flag de
-  // servidor) y el usuario sea Administrador. /features no toca Ollama.
+  // El laboratorio de IA es sólo para Administrador. Se muestra de inmediato
+  // mientras se consulta /ai/features (que no toca Ollama); si el backend no
+  // responde se mantiene visible, para que un fallo de red no deje al admin
+  // sin acceso. Sólo se oculta si el backend responde aiLabEnabled=false.
   const [aiLabEnabled, setAiLabEnabled] = useState(false);
+  const [aiLabChecked, setAiLabChecked] = useState(false);
   useEffect(() => {
     if (!user || user.role !== 'Administrador') {
       setAiLabEnabled(false);
+      setAiLabChecked(true);
       return;
     }
+    setAiLabChecked(false);
     api
       .get<{ aiLabEnabled: boolean }>('/ai/features')
       .then((f) => setAiLabEnabled(f?.aiLabEnabled === true))
-      .catch(() => setAiLabEnabled(false));
+      .catch(() => setAiLabEnabled(true))
+      .finally(() => setAiLabChecked(true));
   }, [user]);
   const [soundOn, setSoundOn] = useState(isSoundEnabled());
   useEffect(() => subscribeSound(() => setSoundOn(isSoundEnabled())), []);
@@ -279,7 +285,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {n.children && (
                 <div className="sidebar-sub">
                   {n.children
-                    .filter((c) => (!c.perm || hasPerm(c.perm)) && (!c.requiresAiLab || aiLabEnabled))
+                    .filter(
+                      (c) =>
+                        (!c.perm || hasPerm(c.perm)) &&
+                        (!c.requiresAiLab || !aiLabChecked || aiLabEnabled),
+                    )
                     .map((c) => {
                       const cActive = pathname.startsWith(c.href);
                       return (

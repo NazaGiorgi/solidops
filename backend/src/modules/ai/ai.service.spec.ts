@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { AiService } from './ai.service';
 import { AiUsageService } from './ai-usage.service';
-import { AiDiagnosticsProvider, AiProvider, ChatResult, EmbedResult } from './ai.types';
+import { AiDiagnosticsProvider, AiProvider, ChatMessage, ChatResult, EmbedResult } from './ai.types';
 import { TicketsService } from '../tickets/tickets.service';
 
 const user = { id: 'user-1', role: 'Administrador' } as never;
@@ -60,26 +60,66 @@ function embedProvider(dimension: number, vectors?: number[][]): AiProvider {
   };
 }
 
+function respuesta(texto: string): ChatResult {
+  return {
+    text: texto,
+    usage: {
+      promptTokens: 4,
+      completionTokens: 8,
+      loadMs: 12,
+      totalMs: 1000,
+      tokensPerSecond: 8,
+    },
+    provider: 'mock',
+    model: 'qwen3:4b',
+  };
+}
+
+function structuredProvider(texto: string): AiProvider {
+  return {
+    name: 'mock',
+    chat: jest.fn(async () => respuesta(texto)),
+    embed: jest.fn(async () => ({}) as EmbedResult),
+    generateJson: jest.fn(async () => respuesta(texto)),
+  };
+}
+
+const ticketDePrueba = {
+  id: 'ticket-1',
+  ticketNumber: 123,
+  createdAt: new Date('2026-11-19T12:00:00Z'),
+  title: 'Sin conexión en el laboratorio',
+  description: 'El equipo del laboratorio no conecta a internet.',
+  status: 'nuevo',
+  priority: 'normal',
+  category: null,
+  messages: [],
+  mergedMessages: [],
+  technician: null,
+};
+
 function build(
   chat: AiProvider,
   embed: AiProvider,
   cfg = config(),
   recorded: Array<Record<string, unknown>> = [],
+  filasCatalogo?: unknown[][],
 ) {
   const usage = {
     record: jest.fn(async (input: Record<string, unknown>) => {
       recorded.push(input);
     }),
   } as unknown as AiUsageService;
-  const dataSource = { query: jest.fn(async () => []) } as unknown as DataSource;
-  const service = new AiService(
-    chat,
-    embed,
-    cfg,
-    usage,
-    {} as TicketsService,
-    dataSource,
-  );
+  const dataSource = {
+    query: jest.fn(async (sql: string) => {
+      if (sql.includes('CREATE EXTENSION')) return [];
+      return filasCatalogo?.shift() ?? [];
+    }),
+  } as unknown as DataSource;
+  const tickets = {
+    findOne: jest.fn(async () => ticketDePrueba),
+  } as unknown as TicketsService;
+  const service = new AiService(chat, embed, cfg, usage, tickets, dataSource);
   return { service, usage, dataSource, recorded };
 }
 
@@ -155,5 +195,98 @@ describe('AiService', () => {
     };
     const down = build(broken, embedProvider(3));
     await expect(down.service.health()).rejects.toThrow(/Ollama no disponible/);
+  });
+
+  it('todos los mensajes arrancan con el sistema en español y terminan con el refuerzo', async () => {
+    const proveedor = chatProvider({ text: 'Hola, ¿en qué puedo ayudar?' });
+    const { service } = build(proveedor, embedProvider(3));
+    await service.chat('¿Qué es un switch?', user);
+
+    const mensajes = (proveedor.chat as jest.Mock).mock.calls[0][0] as ChatMessage[];
+    expect(mensajes[0].content.startsWith(
+      'Sos un asistente de soporte técnico de SolidOps. Respondé SIEMPRE en español de Argentina, claro y breve, aunque el texto del ticket esté en otro idioma.',
+    )).toBe(true);
+    for (const mensaje of mensajes) {
+      expect(mensaje.content.trimEnd().endsWith('Respondé en español.')).toBe(true);
+    }
+  });
+
+  it('reintenta una vez en español cuando la primera respuesta sale en inglés', async () => {
+    const proveedor = chatProvider();
+    (proveedor.chat as jest.Mock)
+      .mockResolvedValueOnce(respuesta('The switch connects devices on the network.'))
+      .mockResolvedValueOnce(respuesta('El switch conecta dispositivos en la red.'));
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = build(proveedor, embedProvider(3), config(), recorded);
+
+    const resultado = await service.chat('¿Qué es un switch?', user);
+    expect(proveedor.chat).toHaveBeenCalledTimes(2);
+    expect(resultado.response).toContain('El switch conecta');
+    expect(resultado.aviso).toBeUndefined();
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ ok: true, feature: 'lab_chat' });
+  });
+
+  it('si vuelve a salir en inglés, muestra el aviso y lo registra en ai_usage_log', async () => {
+    const proveedor = chatProvider({ text: 'The switch connects devices.' });
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = build(proveedor, embedProvider(3), config(), recorded);
+
+    const resultado = await service.chat('¿Qué es un switch?', user);
+    expect(proveedor.chat).toHaveBeenCalledTimes(2);
+    expect(resultado.response).toMatch(/^respuesta en otro idioma:/);
+    expect(resultado.aviso).toBe('respuesta en otro idioma');
+    expect(recorded[0]).toMatchObject({
+      ok: false,
+      errorMessage: 'respuesta en otro idioma',
+      feature: 'lab_chat',
+    });
+  });
+
+  it('el prompt de resumen incluye el ejemplo con el formato esperado', async () => {
+    const proveedor = structuredProvider('{"pedido":"Restablecer internet","probado":"Reiniciar el modem","falta":"Confirmar con el cliente","cliente":"Por email"}');
+    const { service } = build(proveedor, embedProvider(3));
+    await service.summarizeTicket('ticket-1', user);
+
+    const prompt = (proveedor.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('Sos un asistente de soporte técnico de SolidOps');
+    expect(prompt).toContain('Ejemplo de resumen');
+    expect(prompt).toContain('"pedido"');
+    expect(prompt.trimEnd().endsWith('Respondé en español.')).toBe(true);
+  });
+
+  it('clasificación valida categorías y prioridades contra los valores de la base', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"MikroTik","prioridad":"urgente","especialidad":"Redes","duracionEstimada":"2 horas","animo":"Con tranquilidad, lo resolvemos."}',
+    );
+    const filas = [
+      [{ valor: 'Red / Conectividad' }, { valor: 'Taller' }],
+      [{ valor: 'baja' }, { valor: 'normal' }, { valor: 'critica' }],
+    ];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({
+      categoria: 'sin coincidencia',
+      prioridad: 'sin coincidencia',
+    });
+    const prompt = (proveedor.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('Categorías existentes en SolidOps');
+    expect(prompt).toContain('Prioridades existentes en SolidOps');
+    expect(prompt).toContain('Ejemplo de clasificación');
+  });
+
+  it('clasificación acepta valores de la base con tildes y devuelve el nombre en español', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"crítica","especialidad":"Hardware","duracionEstimada":"2 horas","animo":"Con tranquilidad, lo resolvemos."}',
+    );
+    const filas = [
+      [{ valor: 'Red / Conectividad' }, { valor: 'Taller' }],
+      [{ valor: 'baja' }, { valor: 'normal' }, { valor: 'critica' }],
+    ];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({ categoria: 'Taller', prioridad: 'crítica' });
   });
 });

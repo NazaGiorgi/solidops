@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { TicketPriority } from '../../common/enums';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { publicTicketNumber } from '../../common/utils/ticket-number.util';
 import { TicketsService } from '../tickets/tickets.service';
@@ -17,13 +18,17 @@ import {
   AiProvider,
   CHAT_PROVIDER,
   ChatMessage,
+  ChatResult,
   EMBED_PROVIDER,
+  JsonSchema,
 } from './ai.types';
 import {
   cleanTicketText,
   cosineSimilarity,
   extractJsonObject,
   firstValues,
+  isProbablyEnglish,
+  normalizeText,
   truncateForContext,
 } from './ai-text.util';
 
@@ -40,7 +45,60 @@ export interface MetricsView {
 export interface ChatView {
   response: string;
   metrics: MetricsView;
+  aviso?: string;
 }
+
+// Arranca textualmente igual en TODOS los mensajes de sistema del módulo.
+const SISTEMA_ES =
+  'Sos un asistente de soporte técnico de SolidOps. Respondé SIEMPRE en español de Argentina, claro y breve, aunque el texto del ticket esté en otro idioma.';
+const REFUERZO_ES = 'Respondé en español.';
+const AVISO_IDIOMA = 'respuesta en otro idioma';
+const SIN_COINCIDENCIA = 'sin coincidencia';
+
+const EJEMPLO_RESUMEN = [
+  'Ejemplo de resumen (formato esperado, un solo JSON válido):',
+  '{"pedido":"Restablecer la conexión a internet del equipo",' +
+    '"probado":"Reiniciar el modem y probar otro cable",' +
+    '"falta":"Confirmar si el problema persiste con otro proveedor",' +
+    '"cliente":"Solicitó respuesta por email"}',
+].join('\n');
+
+function mensajeSistema(detalle: string): string {
+  // El texto exigido va primero, el refuerzo siempre al final.
+  return `${SISTEMA_ES}${detalle ? `\n\n${detalle}` : ''}\n\n${REFUERZO_ES}`;
+}
+
+function conRefuerzo(contenido: string): string {
+  const texto = contenido.trimEnd();
+  return texto.endsWith(REFUERZO_ES) ? texto : `${texto}\n\n${REFUERZO_ES}`;
+}
+
+function etiquetaPrioridad(valor: string): string {
+  return valor === 'critica' ? 'crítica' : valor;
+}
+
+const SUMMARY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    pedido: { type: 'string' },
+    probado: { type: 'string' },
+    falta: { type: 'string' },
+    cliente: { type: 'string' },
+  },
+  required: ['pedido', 'probado', 'falta', 'cliente'],
+};
+
+const CLASSIFY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    categoria: { type: 'string' },
+    prioridad: { type: 'string' },
+    especialidad: { type: 'string' },
+    duracionEstimada: { type: 'string' },
+    animo: { type: 'string' },
+  },
+  required: ['categoria', 'prioridad', 'especialidad', 'duracionEstimada', 'animo'],
+};
 
 @Injectable()
 export class AiService implements OnModuleInit {
@@ -166,44 +224,104 @@ export class AiService implements OnModuleInit {
   ): Promise<ChatView> {
     this.ensureEnabled();
     const messages: ChatMessage[] = [
-      { role: 'system', content: 'Respondé siempre en español, de forma breve y concreta.' },
-      { role: 'user', content: prompt },
+      { role: 'system', content: mensajeSistema('Respondé de forma breve y concreta.') },
+      { role: 'user', content: conRefuerzo(prompt) },
     ];
-    return this.performChat(messages, opts.model, user.id, opts.feature || 'lab_chat');
+    return this.guardedChat(messages, undefined, opts.model, user.id, opts.feature || 'lab_chat');
   }
 
-  private async performChat(
+  private async recordedChatResult(
+    result: ChatResult,
+    userId: string | null,
+    feature: string,
+    aviso: string | null = null,
+  ): Promise<ChatView> {
+    // El aviso de idioma también queda en ai_usage_log (ok=false + mensaje).
+    await this.usage.record({
+      userId,
+      feature,
+      provider: result.provider,
+      model: result.model,
+      tokensIn: result.usage.promptTokens,
+      tokensOut: result.usage.completionTokens,
+      durationMs: result.usage.totalMs,
+      tokensPerSecond: result.usage.tokensPerSecond,
+      ok: aviso === null,
+      errorMessage: aviso,
+    });
+    return {
+      response: aviso ? `${aviso}: ${result.text}` : result.text,
+      metrics: {
+        tokensIn: result.usage.promptTokens,
+        tokensOut: result.usage.completionTokens,
+        seconds: Number((result.usage.totalMs / 1000).toFixed(2)),
+        tokensPerSecond: result.usage.tokensPerSecond,
+        loadMs: Number(result.usage.loadMs.toFixed(1)),
+        provider: result.provider,
+        model: result.model,
+      },
+      ...(aviso ? { aviso } : {}),
+    };
+  }
+
+  // Resumen y clasificación necesitan un objeto, no prosa. Si el proveedor
+  // tiene salida estructurada la usamos; si no, caemos al chat de siempre.
+  private async callModel(
     messages: ChatMessage[],
+    schema: JsonSchema | undefined,
+    model: string,
+  ): Promise<ChatResult> {
+    const generate = schema ? this.chatProvider.generateJson?.bind(this.chatProvider) : undefined;
+    if (generate) {
+      try {
+        const prompt = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+        return await generate(prompt, schema!, { model });
+      } catch (e) {
+        this.logger.warn(`Salida estructurada fallida; usando chat: ${(e as Error).message}`);
+      }
+    }
+    return this.chatProvider.chat(messages, { model });
+  }
+
+  private reforzar(messages: ChatMessage[]): ChatMessage[] {
+    return [
+      ...messages.map((m) => ({ ...m, content: conRefuerzo(m.content) })),
+      {
+        role: 'user',
+        content: `Tu respuesta anterior salió en otro idioma. Repetila en español de Argentina, claro y breve.\n\n${REFUERZO_ES}`,
+      },
+    ];
+  }
+
+  private sumarUso(primero: ChatResult, segundo: ChatResult): ChatResult {
+    const totalMs = primero.usage.totalMs + segundo.usage.totalMs;
+    const tokens = primero.usage.completionTokens + segundo.usage.completionTokens;
+    return {
+      ...segundo,
+      usage: {
+        ...segundo.usage,
+        promptTokens: primero.usage.promptTokens + segundo.usage.promptTokens,
+        completionTokens: tokens,
+        loadMs: primero.usage.loadMs + segundo.usage.loadMs,
+        totalMs,
+        tokensPerSecond: totalMs > 0 ? Number(((tokens / (totalMs / 1000))).toFixed(2)) : null,
+      },
+    };
+  }
+
+  // Un solo intento extra con la instrucción reforzada. Si sigue en inglés,
+  // se devuelve con aviso y se registra en ai_usage_log.
+  private async guardedChat(
+    messages: ChatMessage[],
+    schema: JsonSchema | undefined,
     modelOverride: string | undefined,
     userId: string | null,
     feature: string,
   ): Promise<ChatView> {
     const model = modelOverride || this.cfg('ai.modelFast', 'qwen3:4b');
+    let result: ChatResult;
     try {
-      const result = await this.chatProvider.chat(messages, { model });
-      await this.usage.record({
-        userId,
-        feature,
-        provider: result.provider,
-        model: result.model,
-        tokensIn: result.usage.promptTokens,
-        tokensOut: result.usage.completionTokens,
-        durationMs: result.usage.totalMs,
-        tokensPerSecond: result.usage.tokensPerSecond,
-        ok: true,
-      });
-      return {
-        response: result.text,
-        metrics: {
-          tokensIn: result.usage.promptTokens,
-          tokensOut: result.usage.completionTokens,
-          seconds: Number((result.usage.totalMs / 1000).toFixed(2)),
-          tokensPerSecond: result.usage.tokensPerSecond,
-          loadMs: Number(result.usage.loadMs.toFixed(1)),
-          provider: result.provider,
-          model: result.model,
-        },
-      };
+      result = await this.callModel(messages, schema, model);
     } catch (e) {
       await this.usage.record({
         userId,
@@ -219,6 +337,18 @@ export class AiService implements OnModuleInit {
       });
       throw this.unavailable(e);
     }
+
+    let aviso: string | null = null;
+    if (isProbablyEnglish(result.text)) {
+      try {
+        const reintento = await this.callModel(this.reforzar(messages), schema, model);
+        result = this.sumarUso(result, reintento);
+        if (isProbablyEnglish(reintento.text)) aviso = AVISO_IDIOMA;
+      } catch (e) {
+        aviso = `${AVISO_IDIOMA}; reintento en español falló: ${(e as Error).message}`;
+      }
+    }
+    return this.recordedChatResult(result, userId, feature, aviso);
   }
 
   async embed(text: string, user: AuthenticatedUser) {
@@ -308,6 +438,49 @@ export class AiService implements OnModuleInit {
     }
   }
 
+  // Sólo SELECT: las opciones válidas salen de los valores que ya existen en
+  // SolidOps. Nunca se escribe en la base desde el laboratorio.
+  private async opcionesClasificacion(): Promise<{
+    categorias: string[];
+    prioridades: string[];
+  }> {
+    let categorias: string[] = [];
+    let prioridades: string[] = [];
+    try {
+      const [filasCategoria, filasPrioridad] = await Promise.all([
+        this.dataSource.query(
+          "SELECT DISTINCT category AS valor FROM tickets WHERE category IS NOT NULL AND btrim(category) <> '' ORDER BY 1",
+        ),
+        this.dataSource.query(
+          "SELECT DISTINCT priority AS valor FROM tickets WHERE priority IS NOT NULL AND btrim(priority) <> '' ORDER BY 1",
+        ),
+      ]);
+      const limpiar = (filas: unknown[]): string[] =>
+        filas
+          .map((fila) => String((fila as { valor?: unknown })?.valor ?? '').trim())
+          .filter(Boolean);
+      categorias = limpiar(filasCategoria as unknown[]);
+      prioridades = limpiar(filasPrioridad as unknown[]);
+    } catch (e) {
+      this.logger.warn(`No se pudieron leer categorías/prioridades: ${(e as Error).message}`);
+    }
+    if (!prioridades.length) prioridades = Object.values(TicketPriority);
+    return { categorias, prioridades };
+  }
+
+  private coincidirOpcion(
+    valor: unknown,
+    opciones: string[],
+    conEtiquetaEspanola = false,
+  ): string {
+    const texto = String(valor ?? '').trim();
+    if (!texto) return SIN_COINCIDENCIA;
+    const normalizado = normalizeText(texto);
+    const encontrado = opciones.find((opcion) => normalizeText(opcion) === normalizado);
+    if (!encontrado) return SIN_COINCIDENCIA;
+    return conEtiquetaEspanola ? etiquetaPrioridad(encontrado) : encontrado;
+  }
+
   private async ticketContext(id: string, actor: AuthenticatedUser) {
     const ticket = await this.tickets.findOne(id, actor);
     const messageBodies = [
@@ -323,9 +496,13 @@ export class AiService implements OnModuleInit {
       `Estado real: ${ticket.status ?? ''} | Prioridad real: ${ticket.priority ?? ''} | Categoría real: ${ticket.category ?? ''}`,
       ...messageBodies.map((body, i) => `Mensaje ${i + 1}:\n${body}`),
     ];
+    // Con num_ctx=8192 se mandaban ~24 KB de ticket y qwen3 (que no puede
+    // desactivar el razonamiento) tardaba minutos en CPU. Acotamos el contexto
+    // del resumen/clasificación sin tocar el num_ctx del proveedor.
+    const contextTokens = Math.min(this.cfg('ai.numCtx', 8192), 2048);
     return {
       ticket,
-      text: truncateForContext(parts.join('\n\n'), this.cfg('ai.numCtx', 8192)),
+      text: truncateForContext(parts.join('\n\n'), contextTokens),
     };
   }
 
@@ -348,14 +525,17 @@ export class AiService implements OnModuleInit {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content:
-          'Sos asistente de soporte. Respondé SOLO un JSON válido con las claves ' +
-          'pedido, probado, falta y cliente, en español. No inventes datos que no estén en el ticket.',
+        content: mensajeSistema(
+          'Resumí el ticket en español de Argentina. Respondé SOLO un JSON válido con las claves ' +
+            'pedido, probado, falta y cliente. No inventes datos que no estén en el ticket.\n\n' +
+            EJEMPLO_RESUMEN,
+        ),
       },
-      { role: 'user', content: `Resumí este ticket:\n\n${text}` },
+      { role: 'user', content: conRefuerzo(`Resumí este ticket:\n\n${text}`) },
     ];
-    const result = await this.performChat(
+    const result = await this.guardedChat(
       messages,
+      SUMMARY_SCHEMA,
       this.cfg('ai.modelSmart', this.cfg('ai.modelFast', 'qwen3:4b')),
       user.id,
       'lab_summarize',
@@ -375,33 +555,65 @@ export class AiService implements OnModuleInit {
           cliente: '',
         };
     // No se guarda nada: este endpoint sólo lee y devuelve el resultado.
-    return { ticket: this.ticketSnapshot(ticket), summary, metrics: result.metrics };
+    return {
+      ticket: this.ticketSnapshot(ticket),
+      summary,
+      metrics: result.metrics,
+      ...(result.aviso ? { aviso: result.aviso } : {}),
+    };
   }
 
   async classifyTicket(id: string, user: AuthenticatedUser) {
     this.ensureEnabled();
     const { ticket, text } = await this.ticketContext(id, user);
+    const opciones = await this.opcionesClasificacion();
+    const categoriaEjemplo = opciones.categorias[0] ?? 'Taller';
+    const prioridadEjemplo = etiquetaPrioridad(opciones.prioridades[0] ?? 'normal');
+    const ejemploClasificacion = [
+      'Ejemplo de clasificación (formato esperado, un solo JSON válido):',
+      `{"categoria":"${categoriaEjemplo}","prioridad":"${prioridadEjemplo}",` +
+        '"especialidad":"Redes","duracionEstimada":"2 horas",' +
+        '"animo":"Con tranquilidad, lo resolvemos."}',
+    ].join('\n');
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content:
-          'Clasificá tickets de soporte. Respondé SOLO un JSON válido con las claves ' +
-          'categoria, prioridad, especialidad, duracionEstimada y animo, en español.',
+        content: mensajeSistema(
+          'Clasificá tickets de soporte técnico. Respondé SOLO un JSON válido con las claves ' +
+            'categoria, prioridad, especialidad, duracionEstimada y animo, en español de Argentina.\n\n' +
+            `Categorías existentes en SolidOps (leídas de la base): ${
+              opciones.categorias.join(', ') || '(sin categorías cargadas)'
+            }.\n\n` +
+            `Prioridades existentes en SolidOps (leídas de la base): ${opciones.prioridades
+              .map(etiquetaPrioridad)
+              .join(', ')}.\n\n` +
+            `Si lo que inferís no coincide con esas listas, escribí "${SIN_COINCIDENCIA}" en ese campo.\n\n` +
+            ejemploClasificacion,
+        ),
       },
-      { role: 'user', content: `Clasificá este ticket:\n\n${text}` },
+      { role: 'user', content: conRefuerzo(`Clasificá este ticket:\n\n${text}`) },
     ];
-    const result = await this.performChat(
+    const result = await this.guardedChat(
       messages,
+      CLASSIFY_SCHEMA,
       this.cfg('ai.modelSmart', this.cfg('ai.modelFast', 'qwen3:4b')),
       user.id,
       'lab_classify',
     );
     const parsed = extractJsonObject(result.response);
+    const ai = parsed
+      ? {
+          ...parsed,
+          categoria: this.coincidirOpcion(parsed.categoria, opciones.categorias),
+          prioridad: this.coincidirOpcion(parsed.prioridad, opciones.prioridades, true),
+        }
+      : parsed;
     return {
       ticket: this.ticketSnapshot(ticket),
-      ai: parsed,
+      ai,
       raw: parsed ? null : result.response.slice(0, 600),
       metrics: result.metrics,
+      ...(result.aviso ? { aviso: result.aviso } : {}),
     };
   }
 

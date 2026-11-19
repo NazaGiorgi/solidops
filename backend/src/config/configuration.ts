@@ -76,6 +76,7 @@ interface EnvConfig {
     embedModel: string;
     embedDim: number;
     numCtx: number;
+    maxTokens: number;
     chatTimeoutMs: number;
   };
 }
@@ -171,6 +172,9 @@ export default (): EnvConfig => {
       embedModel: process.env.AI_EMBED_MODEL || 'bge-m3',
       embedDim: parseInt(process.env.AI_EMBED_DIM || '1024', 10),
       numCtx: parseInt(process.env.AI_OLLAMA_NUM_CTX || '8192', 10),
+      // qwen3:4b sólo admite think:true: sin tope genera razonamiento largo
+      // en CPU y un resumen puede colgarse. Acotamos los tokens de salida.
+      maxTokens: parseInt(process.env.AI_MAX_TOKENS || '2048', 10),
       chatTimeoutMs: parseInt(process.env.AI_CHAT_TIMEOUT_MS || '180000', 10),
     },
   };

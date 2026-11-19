@@ -1,6 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AiProvider, ChatMessage, ChatOptions, ChatResult, EmbedResult } from '../ai.types';
+import {
+  AiProvider,
+  ChatMessage,
+  ChatOptions,
+  ChatResult,
+  EmbedResult,
+  JsonSchema,
+} from '../ai.types';
+import { extractJsonObject } from '../ai-text.util';
 
 // Proveedor sin red: respuestas armadas y embeddings determinísticos por hash.
 // Sirve para probar el cableado del laboratorio sin Ollama ni conexión.
@@ -42,6 +50,20 @@ export class MockAiProvider implements AiProvider {
       provider: this.name,
       model,
     };
+  }
+
+  async generateJson(
+    prompt: string,
+    schema: JsonSchema,
+    opts: ChatOptions = {},
+  ): Promise<ChatResult> {
+    const chat = await this.chat([{ role: 'user', content: prompt }], opts);
+    const parsed = extractJsonObject(chat.text) ?? {};
+    const result: Record<string, string> = {};
+    for (const key of Object.keys(schema.properties)) {
+      result[key] = String(parsed[key] ?? '');
+    }
+    return { ...chat, text: JSON.stringify(result) };
   }
 
   async embed(texts: string[]): Promise<EmbedResult> {

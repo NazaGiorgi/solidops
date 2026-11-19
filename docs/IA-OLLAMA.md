@@ -61,6 +61,21 @@ MAILBOX_WORKER_ENABLED: "false"  # worker IMAP congelado sin tocar la BD
 
 `MAIL_DEV_OUTBOX` ya estaba definido, así que los mails vuelcan a JSON en vez de SMTP. Las casillas de la BD siguen como estaban (4 activas, `shadow_mode=false`): se frenó el worker, **no se modificaron datos**.
 
+Evidencia del override dentro del contenedor (`docker inspect ops-backend --format '{{range .Config.Env}}{{println .}}{{end}}'`):
+
+```text
+MAILBOX_WORKER_ENABLED=false
+WHATSAPP_ACCESS_TOKEN=
+MAIL_DEV_OUTBOX=/tmp/mailout
+AI_ENABLED=true
+AI_LAB_ENABLED=true
+AI_CHAT_PROVIDER=ollama
+AI_EMBED_PROVIDER=ollama
+OLLAMA_URL=http://ollama:11434
+```
+
+**Confirmación shadow (por código, sin conexión IMAP a casillas reales):** el worker ni siquiera se conecta porque `pollAll()` sale temprano con `MAILBOX_WORKER_ENABLED=false`. Además, en la rama `mb.shadowMode` (`mailbox-worker.service.ts:85-91`) sólo se hace `client.fetch({uid, envelope})` y se escribe `inbound_mail_log` con `routed=false` (`recordShadow`, líneas 192-231); un grep por `messageFlags|messageDelete|messageMove|setFlags|.store(|flags:` en ese archivo da **0 coincidencias**. Es decir: no marca `\Seen`, no mueve y no borra mensajes. No se ensayó contra IMAP real para no tocar las casillas de Zammad.
+
 ## 3. Levantar / bajar Ollama
 
 ```bash
@@ -145,7 +160,7 @@ Backups del Paso 0 (verificados):
 |---|---|---|---|
 | `D:\Sistema de Tickets Agenda\backup\ops_msp_pre_ia_20261118-221335.dump` | 2026-11-18 22:13:39 | 20.688.577 bytes | `pg_restore --list`: 245 entradas, sin errores |
 | `D:\Sistema de Tickets Agenda\backup\minio_pre_ia.tar.gz` | 2026-11-18 22:25:54 | 3.911.142.537 bytes | `tar -tzf`: 15 primeras entradas válidas (`./`, `.minio.sys/`, `ops-msp/documents/`, `ops-msp/tickets/…`) |
-| `D:\Sistema de Tickets Agenda\.env.pre-ia` | 2026-11-18 | — | copia del `.env` original |
+| `D:\Sistema de Tickets Agenda\backup\env.pre-ia` | 2026-11-18 | 2.175 bytes | copia del `.env` original; `git status` no lo muestra (`/backup/` ignorado) |
 
 ```powershell
 # Restaurar DB (procedimiento de docs/MIGRATION-BACKUP.md)
@@ -176,6 +191,18 @@ docker exec ops-postgres sh -c "dropdb -U ops ops_msp_restore_test"
 
 Conteos reales de la base original antes del cambio: **40356 tickets, 29 notas, 2509 documentos**.
 
+Prueba de restore ejecutada el 2026-11-18 en `ops_msp_restore_test` (base temporal, dropeada al finalizar):
+
+```text
+pg_restore -U ops -d ops_msp_restore_test --no-owner /tmp/restore_test.dump  → sin errores
+tickets / notes / documents en la restauración: 40356 / 29 / 2509
+tickets / notes / documents en la original:     40356 / 29 / 2509
+```
+
+### Gate pendiente para producción (IBM M3)
+
+**Sin evidencia no se avanza.** Queda pendiente el backup verificado de producción (`pg_dump -Fc` + MinIO + `pg_restore --list` / `tar -tzf`) con nombre, tamaño, fecha y resultado. No se puede ejecutar desde la notebook y **no se inventó**: recién con esa evidencia se habilitará el prompt 02 en el IBM M3. El trabajo de esta rama es exclusivamente local.
+
 ## 6. Pruebas locales
 
 ### 6.1 Verificación estática (ejecutada en la notebook)
@@ -184,10 +211,14 @@ Conteos reales de la base original antes del cambio: **40356 tickets, 29 notas, 
 backend: npm run typecheck        → sin errores
 backend: npm test -- --runInBand  → 7 suites, 41 tests, 0 fallos
 frontend: npm run typecheck       → sin errores
-frontend: npm run build           → "✓ Compiled successfully"; falla después en
-                                    "Collecting page data" con PageNotFoundError /_document
-                                    porque el dev server comparte .next con el build.
-                                    No es un error de TypeScript ni de la página nueva.
+frontend: npm run build           → ✓ Compiled successfully; ✓ Linting and checking
+                                    validity of types; ✓ Generating static pages (34/34);
+                                    EXITCODE=0. BUILD_ID 26dh1wzrP-z1l4roVwJOz.
+                                    Se usó un distDir temporal (.next-ai-check) para no
+                                    pisar el .next del dev server de Docker; se revirtió
+                                    al terminar. El primer intento con .next compartido
+                                    falló en "Collecting page data" con PageNotFoundError
+                                    /_document, sin relación con el código nuevo.
 backend (dentro del container, DB_NAME=ops_msp_e2e):
   npm run test:e2e                → 3 suites, 12 tests, 0 fallos
 ```
@@ -197,6 +228,20 @@ Notas del e2e:
 - Se corre **dentro de `ops-backend`** con `docker compose -f docker-compose.dev.yml exec -e DB_NAME=ops_msp_e2e -T backend npm run test:e2e`. Desde Windows el host no resuelve `postgres` y sin el override `DB_NAME` el guard de aislamiento rechaza `ops_msp`.
 - Se corrigió `backend/test/run-e2e.js`: Node 24/Windows no permite `spawn` directo de `jest.cmd` (`EINVAL`); ahora invoca `node node_modules/jest/bin/jest.js`, sin `shell:true` (que rompía la ruta con espacios `D:\Sistema de Tickets Agenda`).
 - `frontend: npm run lint` no aplica: el repo no tiene configuración ESLint y Next abre el asistente interactivo. `next build` sí ejecuta lint/type-check internos antes del paso que falla por `.next` compartido.
+- Incidente posterior al build: el dev server quedó con un `.next` mezclado (del primer build fallido) y `/login` daba `Cannot find module './845.js'`. Se arregló borrando la caché montada y reiniciando:
+
+```powershell
+Remove-Item -Recurse -Force frontend\.next
+docker compose -f docker-compose.dev.yml restart frontend
+```
+
+```text
+GET http://localhost:3000/login → 200, 7.872 bytes
+contains "Ingresar"=true, "Contraseña"=true, "Cannot find module"=false
+logs: ✓ Ready in 4.4s · ✓ Compiled /login in 8.4s (508 modules) · GET /login 200
+```
+
+El dev server sigue mostrando un aviso no bloqueante de Next sobre el lockfile (`Found lockfile missing swc dependencies` / `Failed to patch lockfile`) porque se revirtió el parche automático que aplicó `next build`; no afecta la compilación ni el login.
 
 ### 6.2 Gating y arranque con Ollama apagado (evidencia real)
 
