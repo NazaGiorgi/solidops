@@ -1,5 +1,6 @@
 import {
   Inject,
+  ConflictException,
   Injectable,
   Logger,
   OnModuleInit,
@@ -10,6 +11,11 @@ import { InjectConnection } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { TicketAuthorType, TicketPriority } from '../../common/enums';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { Ticket } from '../../entities/ticket.entity';
+import {
+  excludeAutomaticNotices,
+  isAutomaticNotice,
+} from '../../common/utils/automatic-ticket-notice.util';
 import { publicTicketNumber } from '../../common/utils/ticket-number.util';
 import { TicketsService } from '../tickets/tickets.service';
 import { AiUsageService } from './ai-usage.service';
@@ -31,6 +37,7 @@ import {
   isProbablyEnglish,
   normalizeText,
   sinDatosSiCorresponde,
+  stripThinkTags,
   truncateForContext,
 } from './ai-text.util';
 
@@ -58,6 +65,7 @@ const SISTEMA_ES =
 const REFUERZO_ES = 'Respondé en español.';
 const AVISO_IDIOMA = 'respuesta en otro idioma';
 const SIN_COINCIDENCIA = 'sin coincidencia';
+const FIRMA_BORRADOR = 'Equipo Solido';
 
 const EJEMPLO_RESUMEN = [
   'Ejemplo de resumen (solo muestra el formato; los valores son ficticios, no los copies):',
@@ -195,6 +203,7 @@ export class AiService implements OnModuleInit {
     return {
       aiEnabled: this.cfg('ai.enabled', false),
       aiLabEnabled: this.cfg('ai.labEnabled', false),
+      aiTicketsEnabled: this.cfg('ai.ticketsEnabled', false),
       chatProvider: this.chatProvider.name,
       embedProvider: this.embedProvider.name,
     };
@@ -625,7 +634,15 @@ export class AiService implements OnModuleInit {
     };
   }
 
-  async summarizeTicket(id: string, user: AuthenticatedUser) {
+  private primerMensajeCliente(ticket: Awaited<ReturnType<TicketsService['findOne']>>): string {
+    const mensajes = [...(ticket.messages || []), ...(ticket.mergedMessages || [])];
+    const primero = mensajes.find((m) => m.authorType === TicketAuthorType.CLIENTE);
+    return cleanTicketText(primero?.body);
+  }
+
+  // `feature` permite reutilizar EXACTAMENTE esta lógica desde el Laboratorio
+  // (lab_summarize) y desde el panel del ticket (ticket_summary).
+  async summarizeTicket(id: string, user: AuthenticatedUser, feature = 'lab_summarize') {
     this.ensureEnabled();
     const { ticket, text, cliente } = await this.ticketContext(id, user);
     const messages: ChatMessage[] = [
@@ -646,7 +663,7 @@ export class AiService implements OnModuleInit {
       SUMMARY_SCHEMA,
       this.cfg('ai.modelSmart', this.cfg('ai.modelFast', 'qwen3:4b')),
       user.id,
-      'lab_summarize',
+      feature,
     );
     const parsed = extractJsonObject(result.response);
     const summary = parsed
@@ -674,7 +691,7 @@ export class AiService implements OnModuleInit {
     };
   }
 
-  async classifyTicket(id: string, user: AuthenticatedUser) {
+  async classifyTicket(id: string, user: AuthenticatedUser, feature = 'lab_classify') {
     this.ensureEnabled();
     const { ticket, text } = await this.ticketContext(id, user);
     const opciones = await this.opcionesClasificacion();
@@ -736,7 +753,7 @@ export class AiService implements OnModuleInit {
       schema,
       this.cfg('ai.modelSmart', this.cfg('ai.modelFast', 'qwen3:4b')),
       user.id,
-      'lab_classify',
+      feature,
     );
     const parsed = extractJsonObject(result.response);
     const prioridadAltaDisponible = opciones.prioridades.some(
@@ -764,6 +781,191 @@ export class AiService implements OnModuleInit {
       metrics: result.metrics,
       ...(result.aviso ? { aviso: result.aviso } : {}),
     };
+  }
+
+  // Borrador para el panel del ticket. NUNCA crea mensajes ni despacha email o
+  // WhatsApp: devuelve texto para que la persona lo revise, edite y envíe con
+  // el botón normal del ticket.
+  async replyDraft(
+    id: string,
+    user: AuthenticatedUser,
+    opciones: { tono?: 'base' | 'corto' | 'formal'; borrador?: string } = {},
+    feature = 'ticket_reply',
+  ) {
+    this.ensureEnabled();
+    const { ticket, text, contacto } = await this.ticketContext(id, user);
+    const automatico = isAutomaticNotice({
+      source: ticket.source,
+      subjectKey: ticket.subjectKey,
+      messages: ticket.messages?.map((m) => ({ authorType: m.authorType })),
+    });
+    if (automatico) {
+      throw new ConflictException('Parece un aviso automático: no se propone respuesta');
+    }
+
+    const tono = opciones.tono || 'base';
+    const ajuste =
+      tono === 'corto'
+        ? 'Hacelo aún más breve, sin perder el tono cordial.'
+        : tono === 'formal'
+          ? 'Usá un tono más formal, siempre en español de Argentina.'
+          : 'Mantené un tono cordial y breve.';
+    const borradorActual = opciones.borrador?.trim();
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: mensajeSistema(
+          'Redactá un borrador de respuesta para el cliente a partir del hilo del ticket.\n\n' +
+            'No inventes horarios, visitas, precios, plazos ni acciones que no estén escritas en el ticket. ' +
+            'Si hace falta un dato que no está, dejá un marcador visible entre corchetes, por ejemplo [completar horario].\n\n' +
+            'No incluyas saludo ni firma: el sistema los agrega con el contacto real de la base y la firma "Equipo Solido".\n\n' +
+            ajuste +
+            (borradorActual ? `\n\nBorrador anterior que hay que ajustar:\n${borradorActual}` : ''),
+        ),
+      },
+      { role: 'user', content: conRefuerzo(`Ticket:\n\n${text}`) },
+    ];
+    const result = await this.guardedChat(
+      messages,
+      undefined,
+      this.cfg('ai.modelFast', 'qwen3:4b'),
+      user.id,
+      feature,
+    );
+
+    let lineas = stripThinkTags(result.textoModelo)
+      .trim()
+      .split('\n')
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim());
+    if (/^(hola|estimad|buenos? d)/i.test(lineas[0] || '')) lineas = lineas.slice(1);
+    while (lineas.length && /^(equipo solido|gracias|saludos|atte\.?)/i.test(lineas[lineas.length - 1] || '')) {
+      lineas = lineas.slice(0, -1);
+    }
+    const cuerpo = lineas.join('\n').trim();
+    const saludo = contacto ? `Hola ${contacto},` : 'Hola,';
+    const draft = `${saludo}\n\n${cuerpo}\n\n${FIRMA_BORRADOR}`;
+
+    return {
+      ticket: this.ticketSnapshot(ticket),
+      contacto: contacto ?? null,
+      draft,
+      textoModelo: result.textoModelo,
+      metrics: result.metrics,
+      ...(result.aviso ? { aviso: result.aviso } : {}),
+    };
+  }
+
+  // "Posibles relacionados": mismo cliente, últimos 90 días, título/primer
+  // mensaje parecido (FTS de Postgres). No hay tabla de embeddings de tickets,
+  // así que no hay similitud vectorial disponible todavía. Sólo lectura.
+  async relatedTickets(id: string, user: AuthenticatedUser, feature = 'ticket_related') {
+    this.ensureEnabled();
+    const inicio = Date.now();
+    try {
+      const actual = await this.tickets.findOne(id, user);
+      const automatico = isAutomaticNotice({
+        source: actual.source,
+        subjectKey: actual.subjectKey,
+        messages: actual.messages?.map((m) => ({ authorType: m.authorType })),
+      });
+      const relacionados: Array<{
+        id: string;
+        numero: string;
+        titulo: string;
+        estado: string;
+        fecha: string;
+      }> = [];
+
+      if (actual.customerId) {
+        const texto = [actual.title, this.primerMensajeCliente(actual)]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const qb = this.dataSource
+          .getRepository(Ticket)
+          .createQueryBuilder('t')
+          .select([
+            't.id',
+            't.title',
+            't.ticketNumber',
+            't.createdAt',
+            't.status',
+            't.customerId',
+          ])
+          .where('t.customer_id = :relCustomer', { relCustomer: actual.customerId })
+          .andWhere('t.id <> :relId', { relId: id })
+          .andWhere('t.created_at >= :relDesde', {
+            relDesde: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          })
+          .andWhere('t.shadow = :relShadow', { relShadow: false })
+          .andWhere('t.merged_into_id IS NULL');
+
+        if (!user.permissions?.includes('tickets:assign') && !user.technicianId) {
+          qb.andWhere('t.created_by_user_id = :relUid', { relUid: user.id });
+        }
+        excludeAutomaticNotices(qb, 't', 'relAuto');
+
+        if (texto) {
+          const primerMsg = `(SELECT tm.body FROM ticket_messages tm WHERE tm.ticket_id = t.id AND tm.author_type = 'cliente' ORDER BY tm.created_at ASC LIMIT 1)`;
+          const vector = `to_tsvector('spanish', coalesce(t.title, '') || ' ' || coalesce(${primerMsg}, ''))`;
+          const termino =
+            texto.split(/\s+/).find((p) => p.length >= 4)?.replace(/[^\p{L}\p{N}]/gu, '') || texto;
+          qb.andWhere(
+            `(${vector} @@ plainto_tsquery('spanish', :relQ) OR t.title ILIKE :relIlike OR t.subject_key ILIKE :relIlike)`,
+            { relQ: texto, relIlike: `%${termino}%` },
+          );
+          qb.addSelect(`ts_rank(${vector}, plainto_tsquery('spanish', :relQ))`, 'rel_rank');
+          // TypeORM normaliza el alias a minúsculas al ordenar: usamos el mismo
+          // nombre en minúsculas en addSelect y en orderBy.
+          qb.orderBy('rel_rank', 'DESC');
+        }
+        qb.addOrderBy('t.created_at', 'DESC').take(3);
+
+        const filas = await qb.getMany();
+        for (const fila of filas) {
+          relacionados.push({
+            id: fila.id,
+            numero: publicTicketNumber(fila.ticketNumber, fila.createdAt),
+            titulo: fila.title,
+            estado: fila.status,
+            fecha: fila.createdAt.toISOString(),
+          });
+        }
+      }
+
+      await this.usage.record({
+        userId: user.id,
+        feature,
+        provider: this.chatProvider.name,
+        model: this.cfg('ai.modelFast', 'qwen3:4b'),
+        tokensIn: 0,
+        tokensOut: 0,
+        durationMs: Date.now() - inicio,
+        tokensPerSecond: null,
+        ok: true,
+      });
+      return {
+        ticket: this.ticketSnapshot(actual),
+        automaticNotice: automatico,
+        related: relacionados,
+        metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
+      };
+    } catch (e) {
+      await this.usage.record({
+        userId: user.id,
+        feature,
+        provider: this.chatProvider.name,
+        model: this.cfg('ai.modelFast', 'qwen3:4b'),
+        tokensIn: 0,
+        tokensOut: 0,
+        durationMs: Date.now() - inicio,
+        tokensPerSecond: null,
+        ok: false,
+        errorMessage: (e as Error).message,
+      });
+      throw this.unavailable(e);
+    }
   }
 
   async benchmark(user: AuthenticatedUser) {

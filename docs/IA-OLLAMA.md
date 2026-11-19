@@ -750,3 +750,127 @@ nuevas son métricas en `ai_usage_log` generadas por las llamadas HTTP de prueba
 `.env` sigue con `AI_MODEL_FAST=AI_MODEL_SMART=qwen3:4b-instruct` y
 `AI_CHAT_TIMEOUT_MS=180000`; los overrides de modelo se hicieron sólo en el
 backend temporal, nunca en el archivo.
+
+---
+
+## 12. IA 03 — Asistente IA dentro del ticket
+
+La IA **sugiere**, la persona **decide**. El panel vive en la pantalla del
+ticket y reutiliza `AiService` (la misma lógica del Laboratorio); no hay
+segunda implementación de resumen, clasificación ni borrador.
+
+### 12.1 Activación y permisos
+
+| Variable / permiso | Valor por defecto | Efecto |
+| --- | --- | --- |
+| `AI_TICKETS_ENABLED` | `false` | Con `false`, los 4 endpoints nuevos responden **404** (`Asistente IA para tickets no disponible`) y el panel no se arma. No alcanza con `AI_ENABLED=true`. |
+| `ai.ticket` | Admin, Supervisor, Coordinador, Técnico | Consulta **no** lo tiene: no ve el panel y los endpoints responden **403**. Además se exige `tickets:read` y el scope normal de visualización del ticket. |
+
+El flag se agregó a `backend/src/config/configuration.ts` y el permiso a
+`backend/src/common/auth/permissions.ts` (seed + `UPDATE roles` verificado en
+BD: `Administrador|t`, `Coordinador|t`, `Supervisor|t`, `Técnico|t`,
+`Consulta|f`). `.env` **no** fue tocado: el `true` sólo existió en el contenedor
+temporal `ops-backend-ia03` (`http://localhost:4001`).
+
+Endpoints nuevos (controlador propio `AiTicketsController`, no dentro de
+`AiController`):
+
+```text
+POST /ai/tickets/:id/summary      → ticket_summary
+POST /ai/tickets/:id/classify     → ticket_classify
+POST /ai/tickets/:id/reply-draft  → ticket_reply
+GET  /ai/tickets/:id/related      → ticket_related
+```
+
+Sólo escriben en `ai_usage_log` con esos `feature`; nunca guardan prompts ni
+respuestas. Hay un solo pedido en curso por `usuario + ticket` (409 si se
+repite) y timeout real con el mensaje exacto `La IA tardó demasiado, probá de
+nuevo`.
+
+### 12.2 Evidencia en vivo
+
+```text
+backup/IA03-PRECHECK-20261119-125808.md   backup local verificado (Paso 0)
+backup/IA03-evidence-flag-off.txt         flag false: features=false, 404 en los 4 endpoints, 403 para Consulta
+backup/IA03-evidence-flag-on.txt          flag true: 3 resúmenes, 3 clasificaciones, 3 borradores, related, 409 automático
+backup/IA03-e2e.txt                       4 suites / 20 tests, exit 0
+backup/IA03-capturas.txt                  texto del panel del flag-on + copia al textarea
+backup/IA03-captura-flag-off.txt          panel ausente con flag false
+backup/IA03-captura-consulta.txt          Consulta sin acceso al panel
+backup/IA03-panel-flag-on.png             captura del panel cargado
+backup/IA03-panel-respuesta-copiada.png   captura tras «Usar en la respuesta»
+backup/IA03-panel-flag-off.png            captura del ticket sin panel
+```
+
+Tabla de tiempos (backend temporal, Ollama `qwen3:4b-instruct`, `num_ctx=8192`,
+GPU; fecha/hora de la corrida: `2026-11-19 15:56`):
+
+| Pedido | Tiempo | Resultado |
+| --- | ---: | --- |
+| `/ai/features` | 0,02 s | 200, `aiTicketsEnabled=true` |
+| Resumen TK-2026-40583 | 1,34 s | 201, claves `pedido/probado/falta/cliente` |
+| Resumen TK-2026-40033 | 1,49 s | 201 |
+| Resumen TK-2026-39593 | 4,90 s | 201 |
+| Clasificar TK-2026-40583 | 1,19 s | 201, categoría/prioridad/especialidad |
+| Clasificar TK-2026-40033 | 1,25 s | 201 |
+| Clasificar TK-2026-39593 | 1,39 s | 201 |
+| Borrador base | 5,19 s | 201, sin envío de WhatsApp/mail |
+| Borrador «Más corto» | 1,90 s | 201 |
+| Borrador «Más formal» | 2,21 s | 201 |
+| Relacionados | 0,03 s | 200, 3 coincidencias del mismo cliente (90 días) |
+| Ticket automático | 0,01 s | 409, sin respuesta propuesta |
+| Ollama apagado | 19,03 s | 503 `Ollama no disponible: fetch failed`; ticket normal 200 en 0,03 s |
+| Timeout forzado (`AI_CHAT_TIMEOUT_MS=5000`) | 5,08 s | 503 `La IA tardó demasiado, probá de nuevo` |
+
+Aplicar y revertir en ticket de prueba (`TK-2026-40583`) con el PATCH normal
+`/api/tickets/:id` y `origin:'ia'`:
+
+```text
+category Red / Conectividad → Taller → Red / Conectividad
+priority normal             → alta   → normal
+audit_logs.meta = {"origen":"IA","detalle":"sugerido por IA y aceptado por Ana Supervisor",
+                   "changedFields":["category"] | ["priority"]}
+```
+
+El borrador agrega saludo con el contacto real de BD y firma `Equipo Solido`;
+cuando falta un dato deja marcadores visibles (`[completar horario]`,
+`[completar acción a seguir]`). «Usar en la respuesta» sólo hace `setBody`
+(0 → 444 caracteres en la captura); el envío sigue siendo el botón normal del
+ticket. Relacionados usa FTS + `ILIKE`, sin embeddings de tickets, y excluye
+avisos automáticos con el criterio único de §10.3.
+
+### 12.3 Verificación y rollback
+
+```text
+backend npx tsc --noEmit -p tsconfig.json   → 0 errores
+frontend npx tsc --noEmit -p tsconfig.json  → 0 errores
+backend npm test -- --runInBand             → 9 suites / 77 tests
+backend e2e (Jest --runInBand --forceExit)  → 4 suites / 20 tests, exit 0
+```
+
+Rollback (sin tocar modelo, versión de Ollama ni `num_ctx`):
+
+1. **Apagar el panel (primary switch).** Quitar `AI_TICKETS_ENABLED=true` del
+   entorno del backend (o dejarlo ausente: el default es `false`) y
+   reiniciar. Los endpoints vuelven a 404 y el panel desaparece; el ticket
+   sigue funcionando igual. No hay que borrar datos ni tocar la BD.
+2. **Quitar el permiso (opcional).** Si se quiere revocar el acceso incluso con
+   el flag prendido, quitar `ai.ticket` de `ROLE_PERMISSIONS` en
+   `permissions.ts` y actualizar `roles.permissions` por seed/UPDATE. Consulta
+   ya no lo tiene.
+3. **Revertir el código.** `git revert <commit IA 03>` en la rama
+   `feat/ia-ollama-base` (o `git checkout -- <archivos>` si aún no se
+   commiteó). Los archivos nuevos a eliminar son
+   `AiTicketsController`, `AiTicketsService`, `ReplyDraftDto`, sus specs,
+   `automatic-ticket-notice.util.*`, `ticket-ai-assistant.tsx` y
+   `test/ai-tickets.e2e-spec.ts`; los modificados se revierten con el commit.
+4. **Verificar.** Repetir `backup/IA03-live.ps1 -Modo flag-off`: `/ai/features`
+   debe devolver `aiTicketsEnabled:false` y los 4 endpoints, 404. Si también
+   se apagó `AI_ENABLED`, `/ai/features` devuelve `aiEnabled:false` y el
+   Laboratorio queda fuera de servicio (503 en sus endpoints).
+5. **Contenedores temporales.** `docker rm -f ops-backend-ia03
+   ops-frontend-ia03` (si existen). El backend principal
+   (`http://localhost:4000`) y Ollama (`ops-ollama`) quedaron intactos; Ollama
+   se apagó y se volvió a encender durante la prueba de disponibilidad.
+
+No se hizo merge a `main`.

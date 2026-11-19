@@ -9,6 +9,7 @@ import { PageHeader, Card, Empty, Pill } from '../../../../components/ui';
 import { NotesSection } from '../../../../components/notes-section';
 import { TicketAppointments } from '../../../../components/ticket-appointments';
 import { ErrorNotice } from '../../../../components/error-notice';
+import { TicketAiAssistant } from '../../../../components/ticket-ai-assistant';
 import {
   STATUS_PILLS,
   STATUS_LABELS,
@@ -498,6 +499,22 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
     }
   }
 
+  // El panel de IA aplica sugerencias usando el PATCH normal del ticket, con
+  // sus validaciones/permisos/auditoría. `origin: 'ia'` deja en auditoría que
+  // fue sugerido por IA y aceptado por el usuario actual.
+  async function applyAiCategory(category: string) {
+    await api.patch(`/tickets/${params.id}`, { category, origin: 'ia' });
+    setTicket((t) => (t ? { ...t, category } : t));
+    await load(false);
+  }
+
+  async function applyAiPriority(priority: string) {
+    await api.patch(`/tickets/${params.id}`, { priority, origin: 'ia' });
+    setData((d) => ({ ...d, priority }));
+    setTicket((t) => (t ? { ...t, priority } : t));
+    await load(false);
+  }
+
   if (!ticket) {
     return (
       <Shell>
@@ -540,9 +557,22 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           </span>
         }
         action={
-          <Link href="/tickets" className="btn">
-            ← volver
-          </Link>
+          <>
+            {hasPerm('ai.ticket') && (
+              <TicketAiAssistant
+                ticketId={ticket.id}
+                current={{ category: ticket.category, priority: data.priority || ticket.priority }}
+                canApply={hasPerm('tickets:update')}
+                shadow={!!ticket.shadow}
+                onApplyCategory={applyAiCategory}
+                onApplyPriority={applyAiPriority}
+                onUseDraft={(texto) => setBody(texto)}
+              />
+            )}
+            <Link href="/tickets" className="btn">
+              ← volver
+            </Link>
+          </>
         }
       />
       {msg && <div className="notice">{msg}</div>}

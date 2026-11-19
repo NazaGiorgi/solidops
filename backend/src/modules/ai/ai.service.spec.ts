@@ -101,6 +101,8 @@ const ticketDePrueba = {
   status: 'nuevo',
   priority: 'normal',
   category: null,
+  source: 'manual',
+  subjectKey: null,
   customer: { id: 'customer-1', name: 'Cliente de prueba SA' },
   contact: { id: 'contact-1', name: 'Contacto de prueba' },
   messages: [],
@@ -139,6 +141,45 @@ describe('AiService', () => {
     const { service, dataSource } = build(chatProvider(), embedProvider(3));
     await service.onModuleInit();
     expect(dataSource.query).toHaveBeenCalledWith('CREATE EXTENSION IF NOT EXISTS vector');
+  });
+
+  it('features expone el flag nuevo AI_TICKETS_ENABLED (default false)', () => {
+    expect(build(chatProvider(), embedProvider(3)).service.features()).toMatchObject({
+      aiEnabled: true,
+      aiLabEnabled: true,
+      aiTicketsEnabled: false,
+    });
+    const habilitado = build(
+      chatProvider(),
+      embedProvider(3),
+      config({ 'ai.ticketsEnabled': true }),
+    );
+    expect(habilitado.service.features().aiTicketsEnabled).toBe(true);
+  });
+
+  it('replyDraft arma saludo desde la BD y firma, sin enviar nada', async () => {
+    const recorded: Array<Record<string, unknown>> = [];
+    const chat = chatProvider({
+      text: 'Hola Contacto de prueba,\n\nYa lo revisamos.\n\nEquipo Solido',
+    });
+    const { service } = build(chat, embedProvider(3), config(), recorded);
+    const r = await service.replyDraft('ticket-1', user);
+    expect(r.draft).toBe('Hola Contacto de prueba,\n\nYa lo revisamos.\n\nEquipo Solido');
+    expect(recorded[0]).toMatchObject({ feature: 'ticket_reply', ok: true });
+    expect(JSON.stringify(recorded[0])).not.toContain('Ya lo revisamos');
+  });
+
+  it('replyDraft no ofrece respuesta en avisos automáticos', async () => {
+    const automatico = {
+      ...ticketDePrueba,
+      source: 'email',
+      subjectKey: 'backup clientes correcto:',
+      messages: [{ authorType: TicketAuthorType.CLIENTE }],
+    } as never;
+    const { service } = build(chatProvider(), embedProvider(3), config(), [], undefined, automatico);
+    await expect(service.replyDraft('ticket-1', user)).rejects.toMatchObject({
+      status: 409,
+    });
   });
 
   it('con AI_ENABLED=false todo endpoint de IA da 503', async () => {

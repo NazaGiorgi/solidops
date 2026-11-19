@@ -48,6 +48,8 @@ export const PERMISSIONS = {
   // notes (módulo de notas tipo Evernote)
   NOTES_READ: 'notes:read',
   NOTES_WRITE: 'notes:write',
+  // ai (asistente dentro del ticket; la IA sugiere, la persona decide)
+  AI_TICKET: 'ai.ticket',
   // workshop (módulo de recepción de equipos de taller)
   WORKSHOP_READ: 'workshop:read',
   WORKSHOP_WRITE: 'workshop:write',
@@ -99,6 +101,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'documents:write': 'Subir/editar documentos',
   'notes:read': 'Ver notas',
   'notes:write': 'Crear/editar notas',
+  'ai.ticket': 'Usar asistente IA en tickets',
   'workshop:read': 'Ver taller (equipos)',
   'workshop:write': 'Registrar/editar equipos y estados',
   'workshop:quotes': 'Armar presupuestos de taller',
@@ -138,6 +141,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.DOCUMENTS_WRITE,
     PERMISSIONS.NOTES_READ,
     PERMISSIONS.NOTES_WRITE,
+    PERMISSIONS.AI_TICKET,
     PERMISSIONS.WORKSHOP_READ,
     PERMISSIONS.WORKSHOP_WRITE,
     PERMISSIONS.WORKSHOP_QUOTES,
@@ -162,6 +166,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.DOCUMENTS_WRITE,
     PERMISSIONS.NOTES_READ,
     PERMISSIONS.NOTES_WRITE,
+    PERMISSIONS.AI_TICKET,
     PERMISSIONS.WORKSHOP_READ,
     PERMISSIONS.WORKSHOP_WRITE,
     PERMISSIONS.WORKSHOP_QUOTES,
@@ -180,6 +185,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.DOCUMENTS_WRITE,
     PERMISSIONS.NOTES_READ,
     PERMISSIONS.NOTES_WRITE,
+    PERMISSIONS.AI_TICKET,
     PERMISSIONS.WORKSHOP_READ,
     PERMISSIONS.WORKSHOP_WRITE,
     PERMISSIONS.WORKSHOP_QUOTES,

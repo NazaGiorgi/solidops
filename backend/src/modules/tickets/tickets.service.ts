@@ -491,7 +491,15 @@ export class TicketsService {
         entityId: id,
         oldValue: oldVals,
         newValue: changed,
-        meta: { changedFields: Object.keys(changed) },
+        meta: {
+          changedFields: Object.keys(changed),
+          ...(dto.origin === 'ia'
+            ? {
+                origen: 'IA',
+                detalle: `sugerido por IA y aceptado por ${actor.name}`,
+              }
+            : {}),
+        },
       });
       // Otros staff ven el cambio (estado/prioridad/asignación/título) en vivo.
       await this.emitTicketUpdatedBroadcast(t);

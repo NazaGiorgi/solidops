@@ -68,6 +68,7 @@ interface EnvConfig {
   ai: {
     enabled: boolean;
     labEnabled: boolean;
+    ticketsEnabled: boolean;
     chatProvider: string;
     embedProvider: string;
     ollamaUrl: string;
@@ -164,6 +165,8 @@ export default (): EnvConfig => {
     ai: {
       enabled: process.env.AI_ENABLED === 'true',
       labEnabled: process.env.AI_LAB_ENABLED === 'true',
+      // El asistente dentro del ticket es opt-in: no alcanza con AI_ENABLED.
+      ticketsEnabled: process.env.AI_TICKETS_ENABLED === 'true',
       chatProvider: process.env.AI_CHAT_PROVIDER || 'ollama',
       embedProvider: process.env.AI_EMBED_PROVIDER || 'ollama',
       ollamaUrl: process.env.OLLAMA_URL || 'http://ollama:11434',

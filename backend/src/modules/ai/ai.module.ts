@@ -4,7 +4,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiUsageLog } from '../../entities/ai-usage-log.entity';
 import { TicketsModule } from '../tickets/tickets.module';
 import { AiController } from './ai.controller';
+import { AiTicketsController } from './ai-tickets.controller';
 import { AiService } from './ai.service';
+import { AiTicketsService } from './ai-tickets.service';
 import { AiUsageService } from './ai-usage.service';
 import { AiProvider, CHAT_PROVIDER, EMBED_PROVIDER } from './ai.types';
 import { MockAiProvider } from './providers/mock.provider';
@@ -24,9 +26,10 @@ function buildProvider(config: ConfigService, kind: string | undefined): AiProvi
 
 @Module({
   imports: [TypeOrmModule.forFeature([AiUsageLog]), TicketsModule],
-  controllers: [AiController],
+  controllers: [AiController, AiTicketsController],
   providers: [
     AiService,
+    AiTicketsService,
     AiUsageService,
     {
       provide: CHAT_PROVIDER,

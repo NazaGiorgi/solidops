@@ -87,6 +87,13 @@ export class UpdateTicketDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  // Origen del cambio, sólo para auditoría. Hoy se usa con 'ia' cuando la
+  // persona acepta una sugerencia del asistente IA. No altera el comportamiento
+  // del endpoint: sigue siendo el PATCH normal de tickets.
+  @IsOptional()
+  @IsIn(['ia'])
+  origin?: 'ia';
 }
 
 export class AssignTicketDto {
