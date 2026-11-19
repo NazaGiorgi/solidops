@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { TicketPriority } from '../../common/enums';
+import { TicketAuthorType, TicketPriority } from '../../common/enums';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { publicTicketNumber } from '../../common/utils/ticket-number.util';
 import { TicketsService } from '../tickets/tickets.service';
@@ -72,6 +72,20 @@ const REGLA_SIN_DATOS =
   'Nunca escribas frases explicativas como "No se ha realizado ningún probado" ' +
   'ni "No se especifica".';
 
+// Descripciones sólo para las categorías que ya existen en la base. No se crea
+// ninguna categoría nueva: si el modelo necesita hardware/PC, debe elegir
+// "Taller", que es la que existe.
+const CATEGORIA_DESCRIPCIONES: Record<string, string> = {
+  'red conectividad':
+    'Red / Conectividad: internet, routers, switches, WiFi, VPN y problemas de conectividad.',
+  soporte:
+    'soporte: soporte general y consultas de software o equipos sin una categoría más específica.',
+  taller:
+    'Taller: equipos, monitores, fuentes, impresoras rotas y reparación de PC/hardware.',
+};
+
+const URGENTE = /urgent|no podemos trabajar|sin sistema|parad[oa]/i;
+
 function mensajeSistema(detalle: string): string {
   // El texto exigido va primero, el refuerzo siempre al final.
   return `${SISTEMA_ES}${detalle ? `\n\n${detalle}` : ''}\n\n${REFUERZO_ES}`;
@@ -84,6 +98,17 @@ function conRefuerzo(contenido: string): string {
 
 function etiquetaPrioridad(valor: string): string {
   return valor === 'critica' ? 'crítica' : valor;
+}
+
+function describirCategorias(categorias: string[]): string {
+  if (!categorias.length) return '(sin categorías cargadas)';
+  return categorias
+    .map(
+      (categoria) =>
+        CATEGORIA_DESCRIPCIONES[normalizeText(categoria)] ??
+        `${categoria}: categoría existente en la base (sin descripción adicional).`,
+    )
+    .join('\n');
 }
 
 const SUMMARY_SCHEMA: JsonSchema = {
@@ -491,16 +516,21 @@ export class AiService implements OnModuleInit {
   private async opcionesClasificacion(): Promise<{
     categorias: string[];
     prioridades: string[];
+    especialidades: string[];
   }> {
     let categorias: string[] = [];
     let prioridades: string[] = [];
+    let especialidades: string[] = [];
     try {
-      const [filasCategoria, filasPrioridad] = await Promise.all([
+      const [filasCategoria, filasPrioridad, filasEspecialidad] = await Promise.all([
         this.dataSource.query(
           "SELECT DISTINCT category AS valor FROM tickets WHERE category IS NOT NULL AND btrim(category) <> '' ORDER BY 1",
         ),
         this.dataSource.query(
           "SELECT DISTINCT priority AS valor FROM tickets WHERE priority IS NOT NULL AND btrim(priority) <> '' ORDER BY 1",
+        ),
+        this.dataSource.query(
+          "SELECT DISTINCT jsonb_array_elements_text(specialties) AS valor FROM technicians WHERE specialties IS NOT NULL ORDER BY 1",
         ),
       ]);
       const limpiar = (filas: unknown[]): string[] =>
@@ -509,11 +539,14 @@ export class AiService implements OnModuleInit {
           .filter(Boolean);
       categorias = limpiar(filasCategoria as unknown[]);
       prioridades = limpiar(filasPrioridad as unknown[]);
+      especialidades = limpiar(filasEspecialidad as unknown[]);
     } catch (e) {
-      this.logger.warn(`No se pudieron leer categorías/prioridades: ${(e as Error).message}`);
+      this.logger.warn(
+        `No se pudieron leer categorías/prioridades/especialidades: ${(e as Error).message}`,
+      );
     }
     if (!prioridades.length) prioridades = Object.values(TicketPriority);
-    return { categorias, prioridades };
+    return { categorias, prioridades, especialidades };
   }
 
   private coincidirOpcion(
@@ -536,18 +569,33 @@ export class AiService implements OnModuleInit {
 
   private async ticketContext(id: string, actor: AuthenticatedUser) {
     const ticket = await this.tickets.findOne(id, actor);
-    const messageBodies = [
-      ...(ticket.messages || []),
-      ...(ticket.mergedMessages || []),
-    ]
-      .map((m) => cleanTicketText(m.body))
-      .filter((body) => body.length > 0);
+    const relacionados = [...(ticket.messages || []), ...(ticket.mergedMessages || [])];
+
+    // El autor sale de la base, no del texto. Sólo dos etiquetas visibles para
+    // el modelo: mensajes del cliente y mensajes del equipo SolidOps (técnico o
+    // sistema). Así no confunde al técnico que escribe con el cliente.
+    const messageBodies = relacionados
+      .map((m) => {
+        const body = cleanTicketText(m.body);
+        if (!body) return '';
+        const etiqueta =
+          m.authorType === TicketAuthorType.CLIENTE ? 'CLIENTE' : 'EQUIPO SOLIDO';
+        return `${etiqueta}: ${body.replace(/\n/g, '\n  ')}`;
+      })
+      .filter(Boolean);
+
+    const razonSocial = ticket.customer?.name?.trim() || null;
+    const contacto = ticket.contact?.name?.trim() || null;
+    const cliente = contacto || razonSocial || null;
 
     const parts = [
       `Título: ${ticket.title ?? ''}`,
       `Descripción: ${cleanTicketText(ticket.description)}`,
       `Estado real: ${ticket.status ?? ''} | Prioridad real: ${ticket.priority ?? ''} | Categoría real: ${ticket.category ?? ''}`,
-      ...messageBodies.map((body, i) => `Mensaje ${i + 1}:\n${body}`),
+      `Cliente real (base de datos): ${razonSocial ?? 'Sin datos'}`,
+      `Contacto real (base de datos): ${contacto ?? 'Sin datos'}`,
+      'El campo "cliente" del resumen debe copiar literalmente el Contacto real; si no hay contacto, el Cliente real. No lo adivines del texto.',
+      ...messageBodies,
     ];
     // Con num_ctx=8192 se mandaban ~24 KB de ticket y qwen3 (que no puede
     // desactivar el razonamiento) tardaba minutos en CPU. Acotamos el contexto
@@ -556,6 +604,9 @@ export class AiService implements OnModuleInit {
     return {
       ticket,
       text: truncateForContext(parts.join('\n\n'), contextTokens),
+      cliente,
+      razonSocial,
+      contacto,
     };
   }
 
@@ -567,6 +618,8 @@ export class AiService implements OnModuleInit {
       estado: ticket.status,
       prioridad: ticket.priority,
       categoria: ticket.category,
+      cliente: ticket.customer?.name ?? null,
+      contacto: ticket.contact?.name ?? null,
       tecnico: ticket.technician?.user?.name ?? null,
       mensajes: (ticket.messages?.length ?? 0) + (ticket.mergedMessages?.length ?? 0),
     };
@@ -574,7 +627,7 @@ export class AiService implements OnModuleInit {
 
   async summarizeTicket(id: string, user: AuthenticatedUser) {
     this.ensureEnabled();
-    const { ticket, text } = await this.ticketContext(id, user);
+    const { ticket, text, cliente } = await this.ticketContext(id, user);
     const messages: ChatMessage[] = [
       {
         role: 'system',
@@ -601,7 +654,8 @@ export class AiService implements OnModuleInit {
           pedido: sinDatosSiCorresponde(parsed.pedido),
           probado: sinDatosSiCorresponde(parsed.probado),
           falta: sinDatosSiCorresponde(parsed.falta),
-          cliente: sinDatosSiCorresponde(parsed.cliente),
+          // El cliente no es una inferencia del modelo: viene de la base.
+          cliente: cliente ?? 'Sin datos',
         }
       : {
           pedido: result.response.slice(0, 500),
@@ -624,6 +678,26 @@ export class AiService implements OnModuleInit {
     this.ensureEnabled();
     const { ticket, text } = await this.ticketContext(id, user);
     const opciones = await this.opcionesClasificacion();
+    const esUrgente = URGENTE.test(text);
+    const schema: JsonSchema = {
+      ...CLASSIFY_SCHEMA,
+      properties: {
+        ...CLASSIFY_SCHEMA.properties,
+        categoria: {
+          ...CLASSIFY_SCHEMA.properties.categoria,
+          description: opciones.categorias.join(', ') || '(sin categorías cargadas)',
+        },
+        prioridad: {
+          ...CLASSIFY_SCHEMA.properties.prioridad,
+          description: opciones.prioridades.join(', '),
+        },
+        especialidad: {
+          ...CLASSIFY_SCHEMA.properties.especialidad,
+          enum: opciones.especialidades,
+          description: 'Una de las especialidades de técnicos que existen en la base',
+        },
+      },
+    };
     const ejemploClasificacion = [
       'Ejemplo de clasificación (solo muestra el formato; TODOS sus valores son ficticios, no los copies):',
       '{"categoria":"CATEGORIA_FICTICIA","prioridad":"PRIORIDAD_FICTICIA",' +
@@ -636,12 +710,17 @@ export class AiService implements OnModuleInit {
         content: mensajeSistema(
           'Clasificá tickets de soporte técnico. Respondé SOLO un JSON válido con las claves ' +
             'categoria, prioridad, especialidad, duracionEstimada y animo, en español de Argentina.\n\n' +
-            `Categorías existentes en SolidOps (leídas de la base): ${
-              opciones.categorias.join(', ') || '(sin categorías cargadas)'
-            }.\n\n` +
+            'Categorías existentes en SolidOps (leídas de la base; usá SOLO una de estas):\n' +
+            `${describirCategorias(opciones.categorias)}\n\n` +
             `Prioridades existentes en SolidOps (leídas de la base): ${opciones.prioridades
               .map(etiquetaPrioridad)
               .join(', ')}.\n\n` +
+            'Reglas de prioridad: si el texto dice "urgente", "no podemos trabajar", ' +
+            '"sin sistema" o "parado" → prioridad "alta". ' +
+            'Si el texto dice "urgente", el campo "animo" debe ser "apurado".\n\n' +
+            `Especialidades de técnicos existentes en SolidOps (leídas de la base; usá SOLO una): ${
+              opciones.especialidades.join(', ') || '(sin especialidades cargadas)'
+            }.\n\n` +
             `El campo "animo" debe ser UNO de: ${ANIMOS.join(', ')}. ` +
             'El campo "duracionEstimada" es un número entero de minutos (por ejemplo 45).\n\n' +
             REGLA_SIN_DATOS +
@@ -654,19 +733,25 @@ export class AiService implements OnModuleInit {
     ];
     const result = await this.guardedChat(
       messages,
-      CLASSIFY_SCHEMA,
+      schema,
       this.cfg('ai.modelSmart', this.cfg('ai.modelFast', 'qwen3:4b')),
       user.id,
       'lab_classify',
     );
     const parsed = extractJsonObject(result.response);
+    const prioridadAltaDisponible = opciones.prioridades.some(
+      (p) => normalizeText(p) === 'alta',
+    );
     const ai = parsed
       ? {
           ...parsed,
           categoria: this.coincidirOpcion(parsed.categoria, opciones.categorias),
-          prioridad: this.coincidirOpcion(parsed.prioridad, opciones.prioridades, true),
-          especialidad: sinDatosSiCorresponde(parsed.especialidad),
-          animo: this.coincidirOpcion(parsed.animo, [...ANIMOS]),
+          prioridad:
+            esUrgente && prioridadAltaDisponible
+              ? etiquetaPrioridad('alta')
+              : this.coincidirOpcion(parsed.prioridad, opciones.prioridades, true),
+          especialidad: this.coincidirOpcion(parsed.especialidad, opciones.especialidades),
+          animo: esUrgente ? 'apurado' : this.coincidirOpcion(parsed.animo, [...ANIMOS]),
           duracionEstimada: this.minutos(parsed.duracionEstimada),
         }
       : parsed;

@@ -543,6 +543,155 @@ Es una estimación por patrón: los correos de monitoreo que llegan con remitent
 “cliente” pueden quedar del lado de personas y algunos asuntos genéricos
 (“consulta”, “test”) del lado automático. No se modificó ninguna fila.
 
+## 11. Clasificación con datos reales + GPU (requerimiento D)
+
+### 11.1 Backups previos (antes de tocar compose/código/docs)
+
+| Archivo | Tamaño | Fecha | SHA256 |
+|---|---:|---|---|
+| `backup/docker-compose.dev.yml.pre-gpu-clasificacion-20261119-090307.bak` | 5725 B | 2026-11-18 22:18:11 | `7694D0DBF7D469B6B530045FFFCEA8E60D0A26AA65B71B50055E044BE8830223` |
+| `backup/ai.service.ts.pre-gpu-clasificacion-20261119-090307.bak` | 26295 B | 2026-11-19 08:57:50 | `748FA779B9BB77997C8A90DA8B38F6C517E46B18F332B7CEB4FE24D6CC858B11` |
+| `backup/ai.service.spec.ts.pre-gpu-clasificacion-20261119-090307.bak` | 18321 B | 2026-11-19 08:58:15 | `F3240A98609B48A827827D6888FC35F8EC2FAD8BAC7B70A82DE395EBE3504BC7` |
+| `backup/IA-OLLAMA.md.pre-gpu-clasificacion-20261119-090307.bak` | 28693 B | 2026-11-19 09:01:18 | `7BFE6FFCD540E6AC53BEB44060BAE39A5F45FF453AAEC86550C312DB9294BD54` |
+| `backup/ai.types.ts.pre-gpu-clasificacion-20261119-090307.bak` | 2297 B | 2026-11-19 08:45:40 | `89849DC94994E74C8E27739319B84854CC774385BC3C2D5B28E9C6F81389335D` |
+
+`ai.types.ts` se respaldó por precaución pero **no** se modificó. `.env` tampoco
+se tocó en esta etapa: sigue con `AI_MODEL_FAST=AI_MODEL_SMART=qwen3:4b-instruct`
+y `AI_CHAT_TIMEOUT_MS=180000` (cambio anterior autorizado, sección 10).
+
+### 11.2 GPU: cambio y evidencia
+
+En `docker-compose.dev.yml` se activó el bloque `deploy.resources.reservations.devices`
+con `driver: nvidia`, `count: all`, `capabilities: [gpu]`, más
+`NVIDIA_VISIBLE_DEVICES=all`, `CUDA_VISIBLE_DEVICES=0`,
+`OLLAMA_MAX_LOADED_MODELS=1` y `OLLAMA_CONTEXT_LENGTH=2048`.
+
+La imagen pasó de `ollama/ollama:0.40.16` a `ollama/ollama:0.6.8`:
+
+- `0.40.16` sólo trae `cuda_v12`/`cuda_v13`; este host tiene driver 511.65 / CUDA 11.6 y no inicializa esos runtimes.
+- `0.6.5` trae `cuda_v11` pero no carga la arquitectura `qwen3`.
+- `0.6.8` trae `cuda_v11` **y** soporta `qwen3`.
+
+`OLLAMA_CONTEXT_LENGTH=2048` es necesario con 6 GB de VRAM: con 8192 tokens
+Ollama descargaba el modelo a CPU. Con 2048 alcanza el prompt completo.
+
+Evidencia dentro de `ops-ollama`:
+
+```text
+docker exec ops-ollama nvidia-smi
+NVIDIA-SMI 510.47.03    Driver Version: 511.65    CUDA Version: 11.6
+GPU 0  NVIDIA GeForce RTX 3060 Laptop GPU   353MiB / 6144MiB
+
+docker logs ops-ollama
+msg="inference compute" id=GPU-… library=cuda variant=v11 compute=8.6
+driver=11.6 name="NVIDIA GeForce RTX 3060 Laptop GPU"
+total="6.0 GiB" available="5.0 GiB"
+
+docker exec ops-ollama ollama ps
+qwen3:4b-instruct  3.5 GB  100% GPU
+qwen3:8b           6.0 GB  11%/89% CPU/GPU
+```
+
+Nota operativa: el motor de Docker Desktop empezó a responder `500 Internal Server
+Error` en `/_ping`, `/version` e `/info`; se reinició Docker Desktop y luego se
+recreó `ops-ollama`. No hubo cambios de datos ni de `.env`.
+
+### 11.3 Correcciones del prompt de clasificación
+
+`backend/src/modules/ai/ai.service.ts` ahora:
+
+- Toma el cliente y el contacto desde la base (`ticket.customer.name`,
+  `ticket.contact.name`) y obliga al resumen a copiar el contacto real; ya no
+  infiere el cliente del texto. En el resumen parseado, `cliente` se sobrescribe
+  con ese valor de la base.
+- Etiqueta cada mensaje con `CLIENTE:` o `EQUIPO SOLIDO:` según `author_type`
+  real (`tecnico` y `sistema` entran en “equipo”). No se manda el número de
+  mensaje ni se deja que el modelo adivine quién escribió.
+- Pasa descripciones de las categorías **existentes**:
+  - `Red / Conectividad`: internet, routers, switches, WiFi, VPN y conectividad.
+  - `soporte`: soporte general y consultas sin categoría más específica.
+  - `Taller`: equipos, monitores, fuentes, impresoras rotas y reparación de PC/hardware.
+- Reglas exactas en la instrucción: `urgente`, `no podemos trabajar`,
+  `sin sistema` o `parado` → prioridad `alta`; si además aparece `urgente`,
+  `animo=apurado`. Estas reglas se aplican también post-parseo.
+- Cierra `especialidad` con `SELECT DISTINCT jsonb_array_elements_text(specialties)
+  FROM technicians`: `email`, `impresoras`, `redes`, `servidores`,
+  `soporte-applicaciones`. Un valor fuera de esa lista se normaliza a
+  `sin coincidencia`.
+
+**No existe la categoría `Hardware` ni `PC` en la base.** Las únicas categorías
+reales son `Red / Conectividad`, `soporte` y `Taller`. No se creó ninguna: los
+casos de PC/impresora/monitor se mapping a `Taller`.
+
+### 11.4 Comparación GPU: `qwen3:4b-instruct` vs `qwen3:8b`
+
+Mismos 4 tickets reales, mismo prompt, mismo código, `think:false`, sin tocar
+`.env` (backend temporal en puerto 4002 con override de modelo). Tiempos en
+segundos medidos de punta a punta desde HTTP.
+
+| Ticket | 4b-instruct | 8b | Diferencia |
+|---|---:|---:|---:|
+| TK-2026-40583 | 0,97 s | 59,77 s | ~61x |
+| TK-2026-40033 | 2,16 s | 102,84 s | ~48x |
+| TK-2026-39593 | 1,42 s | 70,81 s | ~50x |
+| TK-2026-38367 | 1,05 s | 129,21 s | ~123x |
+
+Clasificaciones (`ai` parseado, 4b-instruct):
+
+```text
+TK-2026-40583  Red / Conectividad | normal | redes                 | 60 | tranquilo
+TK-2026-40033  Taller             | normal | soporte-applicaciones  | 45 | tranquilo
+TK-2026-39593  Red / Conectividad | normal | redes                 | 60 | tranquilo
+TK-2026-38367  Taller             | alta   | impresoras            | 60 | apurado
+```
+
+Clasificaciones (`ai` parseado, 8b):
+
+```text
+TK-2026-40583  Red / Conectividad | normal | redes                 | 45 | tranquilo
+TK-2026-40033  soporte            | alta   | soporte-applicaciones  | —  | apurado
+TK-2026-39593  Red / Conectividad | normal | redes                 | 45 | tranquilo
+TK-2026-38367  Taller             | alta   | sin coincidencia      | 60 | apurado
+```
+
+Calidad:
+
+- `TK-2026-38367` es el único con la palabra “urgente” en los mensajes (verificado
+  en BD). Ambos devolvieron `alta`/`apurado` por la regla nueva. Antes el 4b daba
+  `normal`/`preocupado` y cliente `Axel` (del equipo); ahora el cliente sale de BD.
+- El 8b escaló incorrectamente `TK-2026-40033` a `alta`/`apurado` aunque no hay
+  ninguna de las palabras de urgencia en el ticket, y eligió `soporte` en vez de
+  `Taller` para un problema de PC/impresora.
+- El 8b devolvió `sin coincidencia` en la especialidad de `TK-2026-38367`; el 4b
+  eligió `impresoras`, que sí existe en la base.
+- Conclusión: **mantener `qwen3:4b-instruct`**. El 8b no cabe completamente en
+  6 GB (89% GPU / 11% CPU), es ~50x más lento y no mejora la calidad.
+
+### 11.5 Cliente desde BD en resúmenes (4b-instruct)
+
+Salida real del resumen con el prompt nuevo:
+
+```text
+TK-2026-40583  cliente="Cliente Harness WA"   (BD: Panadería Don Pedro / Cliente Harness WA)
+TK-2026-40033  cliente="Adriana Bastida"      (BD: Metalurgicasp / Adriana Bastida)
+TK-2026-39593  cliente="iruanyak@gmail.com"   (BD: Clientes particulares / iruanyak@gmail.com)
+TK-2026-38367  cliente="preceptoria sec -"    (BD: Clientes particulares / preceptoria sec -)
+```
+
+Ya no aparece `Axel` como cliente: era un mensaje del equipo mal atribuido.
+
+### 11.6 Verificación final
+
+```text
+backend npx tsc --noEmit -p tsconfig.json  → sin errores
+backend npx jest --runInBand src/modules/ai → 4 suites, 45 tests, 0 fallos
+select count(*) from tickets   → 40356
+select count(*) from mailboxes → 7
+```
+
+No se modificaron tickets, clientes, contactos ni mensajes. Las únicas escrituras
+nuevas son métricas en `ai_usage_log` generadas por las llamadas HTTP de prueba.
+
 ### 10.4 Verificación
 
 `tsc --noEmit` limpio · Jest **4 suites / 41 tests, 0 fallos** · backend

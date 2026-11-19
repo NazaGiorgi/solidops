@@ -11,6 +11,7 @@ import {
   ChatResult,
   EmbedResult,
 } from './ai.types';
+import { TicketAuthorType } from '../../common/enums';
 import { TicketsService } from '../tickets/tickets.service';
 
 const user = { id: 'user-1', role: 'Administrador' } as never;
@@ -100,6 +101,8 @@ const ticketDePrueba = {
   status: 'nuevo',
   priority: 'normal',
   category: null,
+  customer: { id: 'customer-1', name: 'Cliente de prueba SA' },
+  contact: { id: 'contact-1', name: 'Contacto de prueba' },
   messages: [],
   mergedMessages: [],
   technician: null,
@@ -111,6 +114,7 @@ function build(
   cfg = config(),
   recorded: Array<Record<string, unknown>> = [],
   filasCatalogo?: unknown[][],
+  ticket = ticketDePrueba,
 ) {
   const usage = {
     record: jest.fn(async (input: Record<string, unknown>) => {
@@ -124,7 +128,7 @@ function build(
     }),
   } as unknown as DataSource;
   const tickets = {
-    findOne: jest.fn(async () => ticketDePrueba),
+    findOne: jest.fn(async () => ticket),
   } as unknown as TicketsService;
   const service = new AiService(chat, embed, cfg, usage, tickets, dataSource);
   return { service, usage, dataSource, recorded };
@@ -277,9 +281,58 @@ describe('AiService', () => {
       pedido: 'Reparar impresora',
       probado: 'Sin datos',
       falta: 'Sin datos',
-      cliente: 'Adriana',
+      cliente: 'Contacto de prueba',
     });
     expect(resultado.textoModelo).toContain('No se ha realizado ningún probado');
+  });
+
+  it('toma el cliente de la base y etiqueta a cada autor por su tipo real', async () => {
+    const proveedor = structuredProvider(
+      '{"pedido":"Transformador","probado":"Sin datos","falta":"Sin datos","cliente":"Axel"}',
+    );
+    const ticketUrgente = {
+      ...ticketDePrueba,
+      customer: { id: 'customer-2', name: 'Clientes particulares' },
+      contact: { id: 'contact-2', name: 'preceptoria sec -' },
+      messages: [
+        {
+          id: 'm1',
+          body: 'Lo necesitamos urgente',
+          authorType: TicketAuthorType.CLIENTE,
+        },
+        {
+          id: 'm2',
+          body: 'Ya lo revisamos',
+          authorType: TicketAuthorType.TECNICO,
+        },
+        {
+          id: 'm3',
+          body: 'Su solicitud fue recibida',
+          authorType: TicketAuthorType.SISTEMA,
+        },
+      ],
+    };
+    const { service } = build(
+      proveedor,
+      embedProvider(3),
+      config(),
+      [],
+      undefined,
+      ticketUrgente as never,
+    );
+    const resultado = await service.summarizeTicket('ticket-1', user);
+
+    expect(resultado.summary.cliente).toBe('preceptoria sec -');
+    expect(resultado.ticket).toMatchObject({
+      cliente: 'Clientes particulares',
+      contacto: 'preceptoria sec -',
+    });
+    const prompt = (proveedor.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('Contacto real (base de datos): preceptoria sec -');
+    expect(prompt).toContain('CLIENTE: Lo necesitamos urgente');
+    expect(prompt).toContain('EQUIPO SOLIDO: Ya lo revisamos');
+    expect(prompt).toContain('EQUIPO SOLIDO: Su solicitud fue recibida');
+    expect(prompt).not.toContain('Mensaje 1:');
   });
 
   it('clasificación valida categorías y prioridades contra los valores de la base', async () => {
@@ -370,6 +423,80 @@ describe('AiService', () => {
     const resultado = await service.classifyTicket('ticket-1', user);
 
     expect(resultado.ai).toMatchObject({ animo: 'apurado', duracionEstimada: 45 });
+  });
+
+  it('pasa descripciones de categorías y cierra especialidad con la tabla de técnicos', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"normal","especialidad":"redes","duracionEstimada":60,"animo":"tranquilo"}',
+    );
+    const filas = [
+      [{ valor: 'Red / Conectividad' }, { valor: 'Taller' }],
+      [{ valor: 'normal' }, { valor: 'alta' }],
+      [{ valor: 'redes' }, { valor: 'impresoras' }],
+    ];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({ categoria: 'Taller', especialidad: 'redes' });
+    const prompt = (proveedor.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain(
+      'Red / Conectividad: internet, routers, switches, WiFi, VPN y problemas de conectividad.',
+    );
+    expect(prompt).toContain(
+      'Taller: equipos, monitores, fuentes, impresoras rotas y reparación de PC/hardware.',
+    );
+    expect(prompt).toContain('Especialidades de técnicos existentes');
+    expect(prompt).toContain('redes, impresoras');
+
+    const schema = (proveedor.generateJson as jest.Mock).mock.calls[0][1];
+    expect(schema.properties.especialidad.enum).toEqual(['redes', 'impresoras']);
+  });
+
+  it('fuerza prioridad alta y animo apurado cuando el ticket dice urgente', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"normal","especialidad":"redes","duracionEstimada":60,"animo":"preocupado"}',
+    );
+    const filas = [
+      [{ valor: 'Taller' }],
+      [{ valor: 'normal' }, { valor: 'alta' }],
+      [{ valor: 'redes' }],
+    ];
+    const ticketUrgente = {
+      ...ticketDePrueba,
+      description: 'El cliente dice que lo necesita de manera urgente.',
+    };
+    const { service } = build(
+      proveedor,
+      embedProvider(3),
+      config(),
+      [],
+      filas,
+      ticketUrgente as never,
+    );
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({
+      prioridad: 'alta',
+      animo: 'apurado',
+    });
+    const prompt = (proveedor.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('"sin sistema" o "parado" → prioridad "alta"');
+    expect(prompt).toContain('el campo "animo" debe ser "apurado"');
+  });
+
+  it('rechaza especialidades que no existen en la base', async () => {
+    const proveedor = structuredProvider(
+      '{"categoria":"Taller","prioridad":"normal","especialidad":"Hardware","duracionEstimada":60,"animo":"tranquilo"}',
+    );
+    const filas = [
+      [{ valor: 'Taller' }],
+      [{ valor: 'normal' }],
+      [{ valor: 'redes' }, { valor: 'impresoras' }],
+    ];
+    const { service } = build(proveedor, embedProvider(3), config(), [], filas);
+    const resultado = await service.classifyTicket('ticket-1', user);
+
+    expect(resultado.ai).toMatchObject({ especialidad: 'sin coincidencia' });
   });
 
   it('corta la llamada por timeout y muestra el mensaje exacto', async () => {

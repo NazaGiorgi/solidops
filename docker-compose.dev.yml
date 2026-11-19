@@ -90,14 +90,22 @@ services:
   # IA levanta el compose normal y este servicio NO existe.
   #   docker compose -f docker-compose.dev.yml --profile ai up -d
   ollama:
-    image: ollama/ollama:0.40.16
+    # 0.6.8 trae cuda_v11 (este driver es 511.65 / CUDA 11.6) y soporta qwen3.
+    # 0.40.16 sólo trae cuda_v12/v13; 0.6.5 trae cuda_v11 pero no carga qwen3.
+    image: ollama/ollama:0.6.8
     container_name: ops-ollama
     restart: unless-stopped
     profiles: ["ai"]
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      CUDA_VISIBLE_DEVICES: "0"
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_MAX_LOADED_MODELS: "2"
+      # 6 GB de VRAM: cargar 4B y 8B a la vez no entra. Uno por vez.
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      # Con 8192 tokens el modelo no cabe en 6 GB y Ollama lo deja en CPU.
+      # 2048 alcanza para el prompt y deja 4B/8B en GPU.
+      OLLAMA_CONTEXT_LENGTH: "2048"
     volumes:
       - ollama_models:/root/.ollama
     healthcheck:
@@ -109,15 +117,14 @@ services:
     # Si querés probar desde Windows, descomentá SOLO el loopback:
     # ports:
     #   - "127.0.0.1:11434:11434"
-    # GPU NVIDIA (RTX 3060): descomentar si Docker Desktop tiene GPU support.
-    # Por defecto corre en CPU.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    # GPU NVIDIA (RTX 3060 de 6 GB). Docker Desktop expone el runtime nvidia.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     networks:
       - msp_net
 
