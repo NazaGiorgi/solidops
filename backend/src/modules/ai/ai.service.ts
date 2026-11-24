@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Inject,
   ConflictException,
   Injectable,
@@ -31,6 +32,7 @@ import {
 } from './ai.types';
 import {
   cleanTicketText,
+  copiaHiloDelTicket,
   cosineSimilarity,
   extractJsonObject,
   firstValues,
@@ -128,6 +130,17 @@ const SUMMARY_SCHEMA: JsonSchema = {
     cliente: { type: 'string' },
   },
   required: ['pedido', 'probado', 'falta', 'cliente'],
+};
+
+const REPLY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    respuesta: {
+      type: 'string',
+      description: 'Sólo el mensaje listo para enviar al cliente, sin saludos ni firma',
+    },
+  },
+  required: ['respuesta'],
 };
 
 const ANIMOS = ['tranquilo', 'apurado', 'molesto', 'preocupado', 'neutral'] as const;
@@ -811,11 +824,19 @@ export class AiService implements OnModuleInit {
           ? 'Usá un tono más formal, siempre en español de Argentina.'
           : 'Mantené un tono cordial y breve.';
     const borradorActual = opciones.borrador?.trim();
+    const reglaRespuesta =
+      'Escribí SOLO el mensaje que el equipo le enviaría al cliente ahora, de 2 a 5 oraciones. ' +
+      'No copies la conversación. No repitas "CLIENTE:", "EQUIPO SOLIDO:", el menú del bot ' +
+      'ni encabezados copiados como "Cliente:" o "Contacto:". ' +
+      'Escribilo en segunda persona, hablándole directamente al cliente: no lo describas en tercera persona. ' +
+      'Basate únicamente en el hilo del ticket actual; no reutilices frases de otras conversaciones. ' +
+      'Respondé SOLO un JSON válido con la clave "respuesta" y ese mensaje como valor.';
     const messages: ChatMessage[] = [
       {
         role: 'system',
         content: mensajeSistema(
-          'Redactá un borrador de respuesta para el cliente a partir del hilo del ticket.\n\n' +
+          reglaRespuesta +
+            '\n\n' +
             'No inventes horarios, visitas, precios, plazos ni acciones que no estén escritas en el ticket. ' +
             'Si hace falta un dato que no está, dejá un marcador visible entre corchetes, por ejemplo [completar horario].\n\n' +
             'No incluyas saludo ni firma: el sistema los agrega con el contacto real de la base y la firma "Equipo Solido".\n\n' +
@@ -825,16 +846,47 @@ export class AiService implements OnModuleInit {
       },
       { role: 'user', content: conRefuerzo(`Ticket:\n\n${text}`) },
     ];
-    const result = await this.guardedChat(
-      messages,
-      undefined,
-      this.cfg('ai.modelFast', 'qwen3:4b'),
-      user.id,
-      feature,
-    );
 
-    let lineas = stripThinkTags(result.textoModelo)
-      .trim()
+    const generar = (mensajes: ChatMessage[]) =>
+      this.guardedChat(
+        mensajes,
+        REPLY_SCHEMA,
+        this.cfg('ai.modelFast', 'qwen3:4b'),
+        user.id,
+        feature,
+      );
+    const respuestaDe = (salida: string): string => {
+      const parsed = extractJsonObject(salida);
+      return typeof parsed?.respuesta === 'string' ? parsed.respuesta.trim() : '';
+    };
+
+    let result = await generar(messages);
+    let respuesta = respuestaDe(result.response);
+    let intentos = 1;
+    if (!respuesta || copiaHiloDelTicket(respuesta, text)) {
+      // Un solo reintento con una instrucción más explícita. No se reintentan
+      // errores de red/timeout: esos ya los maneja guardedChat.
+      const reintento: ChatMessage[] = [
+        ...messages.slice(0, -1),
+        {
+          role: 'user',
+          content: conRefuerzo(
+            'La respuesta anterior copió el hilo o salió vacía. Reescribila con palabras propias, ' +
+              'sin transcripto, sin menú del bot y sin encabezados. Debe ser un mensaje nuevo ' +
+              'de 2 a 5 oraciones.\n\nTicket:\n\n' +
+              text,
+          ),
+        },
+      ];
+      result = await generar(reintento);
+      respuesta = respuestaDe(result.response);
+      intentos = 2;
+    }
+    if (!respuesta || copiaHiloDelTicket(respuesta, text)) {
+      throw new BadRequestException('No se pudo generar un borrador útil, probá de nuevo');
+    }
+
+    let lineas = stripThinkTags(respuesta)
       .split('\n')
       .map((l) => l.trimEnd())
       .filter((l) => l.trim());
@@ -843,6 +895,7 @@ export class AiService implements OnModuleInit {
       lineas = lineas.slice(0, -1);
     }
     const cuerpo = lineas.join('\n').trim();
+    if (!cuerpo) throw new BadRequestException('No se pudo generar un borrador útil, probá de nuevo');
     const saludo = contacto ? `Hola ${contacto},` : 'Hola,';
     const draft = `${saludo}\n\n${cuerpo}\n\n${FIRMA_BORRADOR}`;
 
@@ -850,6 +903,7 @@ export class AiService implements OnModuleInit {
       ticket: this.ticketSnapshot(ticket),
       contacto: contacto ?? null,
       draft,
+      intentos,
       textoModelo: result.textoModelo,
       metrics: result.metrics,
       ...(result.aviso ? { aviso: result.aviso } : {}),

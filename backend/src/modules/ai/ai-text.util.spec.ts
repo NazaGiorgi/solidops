@@ -1,5 +1,6 @@
 import {
   cleanTicketText,
+  copiaHiloDelTicket,
   cosineSimilarity,
   extractJsonObject,
   firstValues,
@@ -74,5 +75,21 @@ describe('AI text helpers', () => {
     expect(sinDatosSiCorresponde('No se proporcionaron acciones previas')).toBe('Sin datos');
     expect(sinDatosSiCorresponde('')).toBe('');
     expect(sinDatosSiCorresponde('No se conecta la impresora')).toBe('No se conecta la impresora');
+  });
+
+  it('rechaza borradores que copian marcadores del hilo', () => {
+    const hilo = 'CLIENTE: Hola, necesito ayuda con la red.';
+    expect(copiaHiloDelTicket('CLIENTE: Hola, necesito ayuda con la red.', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('EQUIPO SOLIDO: Ya estamos revisando.', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('Contacto: Adriana\n1️⃣ No tengo internet / la red no anda', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('Elegí una opción escribiendo el número.', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('Ya revisamos el equipo y lo dejamos funcionando.', hilo)).toBe(false);
+  });
+
+  it('rechaza más de 15 palabras seguidas copiadas del hilo', () => {
+    const hilo = Array.from({ length: 20 }, (_, i) => `palabra${i}`).join(' ');
+    expect(copiaHiloDelTicket('Texto propio breve.', hilo)).toBe(false);
+    expect(copiaHiloDelTicket(hilo, hilo)).toBe(true);
+    expect(copiaHiloDelTicket(`Veo que ${hilo} y seguimos`, hilo)).toBe(true);
   });
 });

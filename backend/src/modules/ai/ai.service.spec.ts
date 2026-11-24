@@ -92,6 +92,20 @@ function structuredProvider(texto: string): AiProvider {
   };
 }
 
+function replyProvider(textos: string[]): AiProvider {
+  let i = 0;
+  return {
+    name: 'mock',
+    chat: jest.fn(async () => respuesta(textos[0] || '')),
+    embed: jest.fn(async () => ({}) as EmbedResult),
+    generateJson: jest.fn(async () => {
+      const texto = textos[Math.min(i, textos.length - 1)] || '';
+      i += 1;
+      return respuesta(texto);
+    }),
+  };
+}
+
 const ticketDePrueba = {
   id: 'ticket-1',
   ticketNumber: 123,
@@ -159,14 +173,37 @@ describe('AiService', () => {
 
   it('replyDraft arma saludo desde la BD y firma, sin enviar nada', async () => {
     const recorded: Array<Record<string, unknown>> = [];
-    const chat = chatProvider({
-      text: 'Hola Contacto de prueba,\n\nYa lo revisamos.\n\nEquipo Solido',
-    });
+    const chat = replyProvider([JSON.stringify({ respuesta: 'Ya lo revisamos.' })]);
     const { service } = build(chat, embedProvider(3), config(), recorded);
     const r = await service.replyDraft('ticket-1', user);
     expect(r.draft).toBe('Hola Contacto de prueba,\n\nYa lo revisamos.\n\nEquipo Solido');
+    expect(r.intentos).toBe(1);
     expect(recorded[0]).toMatchObject({ feature: 'ticket_reply', ok: true });
     expect(JSON.stringify(recorded[0])).not.toContain('Ya lo revisamos');
+  });
+
+  it('replyDraft reintenta una vez si el modelo copia el hilo', async () => {
+    const chat = replyProvider([
+      JSON.stringify({ respuesta: 'CLIENTE: Hola, necesito ayuda con la red' }),
+      JSON.stringify({ respuesta: 'Ya estamos revisando la conectividad y te avisamos.' }),
+    ]);
+    const { service } = build(chat, embedProvider(3));
+    const r = await service.replyDraft('ticket-1', user);
+    expect(r.intentos).toBe(2);
+    expect(r.draft).toContain('Ya estamos revisando la conectividad');
+    expect(chat.generateJson).toHaveBeenCalledTimes(2);
+  });
+
+  it('replyDraft falla con mensaje claro si vuelve a copiar', async () => {
+    const chat = replyProvider([
+      JSON.stringify({ respuesta: 'CLIENTE: Hola, necesito ayuda' }),
+      JSON.stringify({ respuesta: 'EQUIPO SOLIDO: Ya estamos revisando' }),
+    ]);
+    const { service } = build(chat, embedProvider(3));
+    await expect(service.replyDraft('ticket-1', user)).rejects.toMatchObject({
+      status: 400,
+      message: 'No se pudo generar un borrador útil, probá de nuevo',
+    });
   });
 
   it('replyDraft no ofrece respuesta en avisos automáticos', async () => {

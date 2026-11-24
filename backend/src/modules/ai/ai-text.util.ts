@@ -143,3 +143,34 @@ export function extractJsonObject(text: string): Record<string, unknown> | null 
     return null;
   }
 }
+
+// Detecta que el modelo "copió y pegó" el hilo en lugar de redactar. Se usa
+// sólo sobre la respuesta ya parseada, antes de armar el borrador con saludo
+// y firma propios. Es conservadora: cualquier frase de 16 palabras seguidas
+// que aparezca en el hilo se considera copia.
+export function copiaHiloDelTicket(respuesta: string, hilo: string): boolean {
+  const salida = stripThinkTags(respuesta).trim();
+  if (!salida) return true;
+
+  // Marcadores del transcript y del menú del bot que nunca deben aparecer en
+  // un mensaje listo para enviar al cliente.
+  if (/(^|\n)\s*(cliente|contacto)\s*:/i.test(salida)) return true;
+  if (/\bequipo\s+solid[oa]\s*:/i.test(salida)) return true;
+  if (/(^|\n)\s*[1-9](?:\uFE0F)?\u20E3\s+\S/m.test(salida)) return true;
+  if (/(^|\n)\s*[1-9][\).-]\s+\S/m.test(salida)) return true;
+  if (normalizeText(salida).includes('elegi una opcion escribiendo el numero')) return true;
+
+  const palabrasSalida = normalizeText(salida).split(/\s+/).filter(Boolean);
+  const palabrasHilo = normalizeText(hilo).split(/\s+/).filter(Boolean);
+  const N = 16;
+  if (palabrasSalida.length < N || palabrasHilo.length < N) return false;
+
+  const secuencias = new Set<string>();
+  for (let i = 0; i <= palabrasHilo.length - N; i += 1) {
+    secuencias.add(palabrasHilo.slice(i, i + N).join(' '));
+  }
+  for (let i = 0; i <= palabrasSalida.length - N; i += 1) {
+    if (secuencias.has(palabrasSalida.slice(i, i + N).join(' '))) return true;
+  }
+  return false;
+}

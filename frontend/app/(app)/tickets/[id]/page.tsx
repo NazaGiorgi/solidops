@@ -561,6 +561,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
             {hasPerm('ai.ticket') && (
               <TicketAiAssistant
                 ticketId={ticket.id}
+                status={ticket.status}
                 current={{ category: ticket.category, priority: data.priority || ticket.priority }}
                 canApply={hasPerm('tickets:update')}
                 shadow={!!ticket.shadow}
@@ -575,6 +576,8 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           </>
         }
       />
+      <div className={`ticket-layout${hasPerm('ai.ticket') ? ' with-ai' : ''}`}>
+        <div className="ticket-main">
       {msg && <div className="notice">{msg}</div>}
       {error && <ErrorNotice message={error} onDismiss={() => setError('')} />}
       {ticket.shadow && (
@@ -1171,6 +1174,9 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           </button>
         </div>
       </Card>
+        </div>
+        {hasPerm('ai.ticket') && <div id="ticket-ai-panel-slot" className="ticket-ai-slot" />}
+      </div>
     </Shell>
   );
 }

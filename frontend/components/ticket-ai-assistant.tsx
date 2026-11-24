@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { api, ApiError } from '../lib/api';
 import { PRIORITY_LABELS } from '../lib/helpers';
@@ -36,6 +37,7 @@ interface Relacionado {
 
 interface Props {
   ticketId: string;
+  status: string;
   current: { category: string | null; priority: string };
   canApply: boolean;
   shadow: boolean;
@@ -45,6 +47,7 @@ interface Props {
 }
 
 const SIN_COINCIDENCIA = 'sin coincidencia';
+const OPEN_KEY = 'solidops-ai-assistant-open';
 
 function mensajeDe(e: unknown): string {
   if (e instanceof ApiError) return e.message;
@@ -70,6 +73,7 @@ function etiquetaPrioridad(v: string): string {
 
 export function TicketAiAssistant({
   ticketId,
+  status,
   current,
   canApply,
   shadow,
@@ -78,11 +82,13 @@ export function TicketAiAssistant({
   onUseDraft,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [features, setFeatures] = useState<Features | null>(null);
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [resumenAt, setResumenAt] = useState('');
   const [clasificacion, setClasificacion] = useState<Clasificacion | null>(null);
   const [borrador, setBorrador] = useState('');
+  const [borradorError, setBorradorError] = useState('');
   const [relacionados, setRelacionados] = useState<Relacionado[]>([]);
   const [automatico, setAutomatico] = useState(false);
   const [relacionadosCargados, setRelacionadosCargados] = useState(false);
@@ -92,6 +98,28 @@ export function TicketAiAssistant({
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [noDisponible, setNoDisponible] = useState(false);
+
+  // Recordar abierto/cerrado por usuario. localStorage puede estar bloqueado:
+  // el panel sigue funcionando aunque no se pueda persistir la preferencia.
+  function cambiarOpen(valor: boolean) {
+    setOpen(valor);
+    try {
+      localStorage.setItem(OPEN_KEY, String(valor));
+    } catch {
+      // Sin persistencia: sólo se pierde la preferencia entre recargas.
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const guardado = localStorage.getItem(OPEN_KEY);
+      if (guardado !== null) setOpen(guardado === 'true');
+    } catch {
+      // Sin persistencia: arranca cerrado.
+    }
+    // El panel se monta en la columna lateral de la pantalla del ticket.
+    setPortalTarget(document.getElementById('ticket-ai-panel-slot'));
+  }, []);
 
   useEffect(() => {
     api
@@ -177,13 +205,24 @@ export function TicketAiAssistant({
   }
 
   async function proponerRespuesta(tono: 'base' | 'corto' | 'formal' = 'base') {
-    const r = await ejecutar('reply', () =>
-      api.post<{ draft: string }>(`/ai/tickets/${ticketId}/reply-draft`, {
+    if (busy) return;
+    setBusy('reply');
+    setBorradorError('');
+    setError('');
+    setAviso('');
+    try {
+      const r = await api.post<{ draft: string }>(`/ai/tickets/${ticketId}/reply-draft`, {
         tono,
         ...(tono !== 'base' && borrador ? { borrador } : {}),
-      }),
-    );
-    if (r) setBorrador(r.draft);
+      });
+      setBorrador(r.draft);
+    } catch (e) {
+      const msg = mensajeDe(e);
+      if (msg.includes('No se pudo generar un borrador útil')) setBorradorError(msg);
+      else fallo(e);
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function aplicar(kind: 'category' | 'priority', valor: string) {
@@ -197,6 +236,7 @@ export function TicketAiAssistant({
   const visible = !!features?.aiEnabled && !!features?.aiTicketsEnabled;
   if (!visible) return null;
 
+  const cerrado = status === 'cerrado';
   const ai = clasificacion?.ai;
   const filas = ai
     ? [
@@ -213,186 +253,201 @@ export function TicketAiAssistant({
       ]
     : [];
 
-  return (
-    <>
-      <button className="btn btn-sm" type="button" onClick={() => setOpen((v) => !v)}>
-        🤖 Asistente IA
-      </button>
-      {open && (
-        <aside
-          aria-label="Asistente IA"
-          style={{
-            position: 'fixed',
-            top: 0,
-            right: 0,
-            width: Math.min(460, typeof window === 'undefined' ? 460 : window.innerWidth),
-            height: '100vh',
-            overflowY: 'auto',
-            zIndex: 1000,
-            padding: 16,
-            background: 'var(--bg, #141414)',
-            borderLeft: '1px solid var(--border, #3a3a3a)',
-            boxShadow: '-8px 0 24px rgba(0,0,0,.35)',
-          }}
-        >
-          <div className="flex flex-between" style={{ alignItems: 'center' }}>
-            <h3 className="card-title" style={{ margin: 0 }}>Asistente IA</h3>
-            <button className="btn btn-ghost btn-sm" type="button" onClick={() => setOpen(false)}>
-              ✕ cerrar
+  const panel = (
+    <aside className="ticket-ai-panel" aria-label="Asistente IA">
+      <div className="flex flex-between" style={{ alignItems: 'center' }}>
+        <h3 className="card-title" style={{ margin: 0 }}>Asistente IA</h3>
+        <button className="btn btn-ghost btn-sm" type="button" onClick={() => cambiarOpen(false)}>
+          ✕ cerrar
+        </button>
+      </div>
+      <div className="ai-muted mt-8">
+        La IA sugiere, la persona decide. Nada se guarda ni se envía sin un clic explícito.
+      </div>
+
+      {noDisponible && (
+        <div className="notice notice-error mt-8">
+          <strong>IA no disponible.</strong> El ticket sigue funcionando normalmente.
+        </div>
+      )}
+      {error && <div className="notice notice-error mt-8">{error}</div>}
+      {aviso && <div className="notice mt-8">{aviso}</div>}
+      {busy && <div className="ai-muted mt-8">Pensando… ({segundos} s)</div>}
+
+      <section className="ai-section">
+        <div className="flex flex-between" style={{ alignItems: 'center' }}>
+          <h4 style={{ margin: 0 }}>Resumen</h4>
+          <button className="btn btn-sm" type="button" onClick={resumir} disabled={!!busy}>
+            {resumen ? 'Actualizar' : 'Resumir'}
+          </button>
+        </div>
+        {resumen && (
+          <>
+            <div className="ai-muted mt-8">Generado: {resumenAt}</div>
+            <div className="stack mt-8 ai-small">
+              {(['pedido', 'probado', 'falta', 'cliente'] as const).map((k) => (
+                <div key={k}>
+                  <strong>{k === 'pedido' ? 'Pedido' : k === 'probado' ? 'Probado' : k === 'falta' ? 'Falta' : 'Cliente'}:</strong>{' '}
+                  {resumen[k] || 'Sin datos'}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="ai-section">
+        <div className="flex flex-between" style={{ alignItems: 'center' }}>
+          <h4 style={{ margin: 0 }}>Clasificación</h4>
+          <button className="btn btn-sm" type="button" onClick={clasificar} disabled={!!busy}>
+            Sugerir clasificación
+          </button>
+        </div>
+        {filas.length > 0 && (
+          <table className="ai-compare-table mt-8">
+            <thead>
+              <tr>
+                <th>Campo</th>
+                <th>Actual</th>
+                <th>Sugerido</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f) => {
+                const distinto = normalizar(f.actual) !== normalizar(f.sugerido);
+                // Sólo categoría y prioridad se resaltan: el resto es informativo.
+                const resaltar = !!f.kind && distinto;
+                return (
+                  <tr key={f.label}>
+                    <td className="muted">{f.label}</td>
+                    <td>{f.actual}</td>
+                    <td>
+                      <span className={resaltar ? 'ai-diff' : ''}>
+                        {f.sugerido}
+                        {resaltar && f.sugerido === SIN_COINCIDENCIA ? ' (sin coincidencia)' : ''}
+                      </span>
+                      {f.kind && !shadow && canApply && resaltar && f.sugerido !== SIN_COINCIDENCIA && (
+                        <div className="mt-8">
+                          <button
+                            className="btn btn-sm"
+                            type="button"
+                            disabled={!!busy}
+                            onClick={() =>
+                              aplicar(
+                                f.kind!,
+                                f.kind === 'priority'
+                                  ? valorPrioridad(f.sugerido) || f.sugerido
+                                  : f.sugerido,
+                              )
+                            }
+                          >
+                            Aplicar {f.kind === 'category' ? 'categoría' : 'prioridad'}
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {/* El bloque de Respuesta nunca se oculta: si no se puede proponer,
+          se explica el motivo. Así no parece que el botón "desapareció". */}
+      <section className="ai-section">
+        <h4 style={{ margin: 0 }}>Respuesta</h4>
+        {!relacionadosCargados ? (
+          <button className="btn btn-sm mt-8" type="button" disabled>
+            Cargando…
+          </button>
+        ) : shadow ? (
+          <div className="notice notice-shadow mt-8">
+            Este ticket viene de una casilla en modo sombra (sólo lectura): no se proponen respuestas.
+          </div>
+        ) : automatico ? (
+          <div className="notice notice-shadow mt-8">
+            Este ticket parece un aviso automático: no se propone respuesta al cliente.
+          </div>
+        ) : (
+          <>
+            {cerrado && <div className="notice notice-shadow mt-8">Este ticket está cerrado</div>}
+            {borradorError && <div className="notice notice-error mt-8">{borradorError}</div>}
+            <button
+              className="btn btn-sm mt-8"
+              type="button"
+              onClick={() => proponerRespuesta()}
+              disabled={!!busy}
+            >
+              {borrador ? 'Actualizar borrador' : cerrado ? 'Proponer igual' : 'Proponer respuesta'}
             </button>
-          </div>
-          <div className="muted mt-8" style={{ fontSize: 12 }}>
-            La IA sugiere, la persona decide. Nada se guarda ni se envía sin un clic explícito.
-          </div>
-
-          {noDisponible && (
-            <div className="notice notice-error mt-8">
-              <strong>IA no disponible.</strong> El ticket sigue funcionando normalmente.
-            </div>
-          )}
-          {error && <div className="notice notice-error mt-8">{error}</div>}
-          {aviso && <div className="notice mt-8">{aviso}</div>}
-          {busy && (
-            <div className="muted mt-8" style={{ fontSize: 12 }}>
-              Pensando… ({segundos} s)
-            </div>
-          )}
-          {automatico && (
-            <div className="notice mt-8">Parece un aviso automático. No se ofrece respuesta al cliente.</div>
-          )}
-
-          <section style={{ marginTop: 16, borderTop: '1px solid var(--border, #3a3a3a)', paddingTop: 12 }}>
-            <div className="flex flex-between" style={{ alignItems: 'center' }}>
-              <h4 style={{ margin: 0 }}>Resumen</h4>
-              <button className="btn btn-sm" type="button" onClick={resumir} disabled={!!busy}>
-                {resumen ? 'Actualizar' : 'Resumir'}
-              </button>
-            </div>
-            {resumen && (
+            {borrador && (
               <>
-                <div className="muted mt-8" style={{ fontSize: 11 }}>Generado: {resumenAt}</div>
-                <div className="stack mt-8" style={{ fontSize: 13 }}>
-                  {(['pedido', 'probado', 'falta', 'cliente'] as const).map((k) => (
-                    <div key={k}>
-                      <strong>{k === 'pedido' ? 'Pedido' : k === 'probado' ? 'Probado' : k === 'falta' ? 'Falta' : 'Cliente'}:</strong>{' '}
-                      {resumen[k] || 'Sin datos'}
-                    </div>
-                  ))}
+                <div className="ai-draft mt-8">{borrador}</div>
+                <div className="flex wrap mt-8" style={{ gap: 6 }}>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    type="button"
+                    disabled={!!busy}
+                    onClick={() => onUseDraft(borrador)}
+                  >
+                    Usar en la respuesta
+                  </button>
+                  <button className="btn btn-sm" type="button" disabled={!!busy} onClick={() => proponerRespuesta('corto')}>
+                    Más corto
+                  </button>
+                  <button className="btn btn-sm" type="button" disabled={!!busy} onClick={() => proponerRespuesta('formal')}>
+                    Más formal
+                  </button>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    type="button"
+                    onClick={() => {
+                      setBorrador('');
+                      setBorradorError('');
+                    }}
+                  >
+                    Descartar
+                  </button>
+                </div>
+                <div className="ai-muted mt-8">
+                  Copia el texto a la caja del ticket. No envía nada: revisá y tocá «responder» vos.
                 </div>
               </>
             )}
-          </section>
+          </>
+        )}
+      </section>
 
-          <section style={{ marginTop: 16, borderTop: '1px solid var(--border, #3a3a3a)', paddingTop: 12 }}>
-            <div className="flex flex-between" style={{ alignItems: 'center' }}>
-              <h4 style={{ margin: 0 }}>Clasificación</h4>
-              <button className="btn btn-sm" type="button" onClick={clasificar} disabled={!!busy}>
-                Sugerir clasificación
-              </button>
-            </div>
-            {filas.length > 0 && (
-              <div className="stack mt-8" style={{ fontSize: 12 }}>
-                {filas.map((f) => {
-                  const distinto = normalizar(f.actual) !== normalizar(f.sugerido);
-                  return (
-                    <div key={f.label} style={{ borderBottom: '1px solid var(--border, #333)', paddingBottom: 6 }}>
-                      <div className="muted">{f.label}</div>
-                      <div>actual: {f.actual}</div>
-                      <div style={{ color: distinto ? '#f0ad4e' : 'inherit' }}>
-                        sugerido: {f.sugerido}
-                        {distinto && f.sugerido === SIN_COINCIDENCIA ? ' (sin coincidencia)' : ''}
-                      </div>
-                      {f.kind && canApply && distinto && f.sugerido !== SIN_COINCIDENCIA && (
-                        <button
-                          className="btn btn-sm mt-8"
-                          type="button"
-                          disabled={!!busy}
-                          onClick={() =>
-                            aplicar(
-                              f.kind!,
-                              f.kind === 'priority'
-                                ? valorPrioridad(f.sugerido) || f.sugerido
-                                : f.sugerido,
-                            )
-                          }
-                        >
-                          Aplicar {f.kind === 'category' ? 'categoría' : 'prioridad'}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+      <section className="ai-section">
+        <h4 style={{ margin: 0 }}>Posibles relacionados</h4>
+        {relacionados.length === 0 ? (
+          <div className="ai-muted mt-8">Sin coincidencias en los últimos 90 días.</div>
+        ) : (
+          <ul className="stack mt-8 ai-small" style={{ paddingLeft: 16 }}>
+            {relacionados.map((r) => (
+              <li key={r.id}>
+                <Link href={`/tickets/${r.id}`} className="link">
+                  {r.numero || `#${r.id.slice(0, 8)}`} · {r.titulo}
+                </Link>
+                <div className="ai-muted">
+                  {new Date(r.fecha).toLocaleDateString('es-AR')} · {r.estado}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </aside>
+  );
 
-          {relacionadosCargados && !automatico && !shadow && (
-            <section style={{ marginTop: 16, borderTop: '1px solid var(--border, #3a3a3a)', paddingTop: 12 }}>
-              <h4 style={{ margin: 0 }}>Respuesta</h4>
-              <button
-                className="btn btn-sm mt-8"
-                type="button"
-                onClick={() => proponerRespuesta()}
-                disabled={!!busy}
-              >
-                Proponer respuesta
-              </button>
-              {borrador && (
-                <>
-                  <div
-                    className="mt-8"
-                    style={{ whiteSpace: 'pre-wrap', fontSize: 13, border: '1px solid var(--border, #3a3a3a)', borderRadius: 8, padding: 8 }}
-                  >
-                    {borrador}
-                  </div>
-                  <div className="flex wrap mt-8" style={{ gap: 6 }}>
-                    <button
-                      className="btn btn-sm btn-primary"
-                      type="button"
-                      disabled={!!busy}
-                      onClick={() => onUseDraft(borrador)}
-                    >
-                      Usar en la respuesta
-                    </button>
-                    <button className="btn btn-sm" type="button" disabled={!!busy} onClick={() => proponerRespuesta('corto')}>
-                      Más corto
-                    </button>
-                    <button className="btn btn-sm" type="button" disabled={!!busy} onClick={() => proponerRespuesta('formal')}>
-                      Más formal
-                    </button>
-                    <button className="btn btn-sm btn-ghost" type="button" onClick={() => setBorrador('')}>
-                      Descartar
-                    </button>
-                  </div>
-                  <div className="muted mt-8" style={{ fontSize: 11 }}>
-                    Copia el texto a la caja del ticket. No envía nada: revisá y tocá «responder» vos.
-                  </div>
-                </>
-              )}
-            </section>
-          )}
-
-          <section style={{ marginTop: 16, borderTop: '1px solid var(--border, #3a3a3a)', paddingTop: 12 }}>
-            <h4 style={{ margin: 0 }}>Posibles relacionados</h4>
-            {relacionados.length === 0 ? (
-              <div className="muted mt-8" style={{ fontSize: 12 }}>Sin coincidencias en los últimos 90 días.</div>
-            ) : (
-              <ul className="stack mt-8" style={{ fontSize: 12, paddingLeft: 16 }}>
-                {relacionados.map((r) => (
-                  <li key={r.id}>
-                    <Link href={`/tickets/${r.id}`} className="link">
-                      {r.numero || `#${r.id.slice(0, 8)}`} · {r.titulo}
-                    </Link>
-                    <div className="muted">
-                      {new Date(r.fecha).toLocaleDateString('es-AR')} · {r.estado}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </aside>
-      )}
+  return (
+    <>
+      <button className="btn btn-sm" type="button" onClick={() => cambiarOpen(!open)}>
+        🤖 Asistente IA
+      </button>
+      {open && portalTarget ? createPortal(panel, portalTarget) : null}
     </>
   );
 }
