@@ -29,6 +29,10 @@ Sin IA: `docker compose -f docker-compose.dev.yml up -d` **no levanta Ollama** (
 | Modelo de embeddings | `bge-m3` (1024 dimensiones) |
 | Imagen Ollama | `ollama/ollama:0.40.16` (tag fijado, no `latest`) |
 
+> Los valores de esa tabla son los del arranque de la prueba. Los valores
+> finales de la rama son `ollama/ollama:0.9.2`, `qwen3:4b-instruct` y
+> `num_ctx=8192` con GPU (§10 y §11); no se cambiaron sin autorización.
+
 > Para subir la memoria de Docker: editar `%UserProfile%\.wslconfig` con `[wsl2] memory=12GB` y reiniciar WSL (`wsl --shutdown`). **No se cambió sin autorización.**
 
 ## 2. Variables
@@ -767,10 +771,20 @@ segunda implementación de resumen, clasificación ni borrador.
 | `ai.ticket` | Admin, Supervisor, Coordinador, Técnico | Consulta **no** lo tiene: no ve el panel y los endpoints responden **403**. Además se exige `tickets:read` y el scope normal de visualización del ticket. |
 
 El flag se agregó a `backend/src/config/configuration.ts` y el permiso a
-`backend/src/common/auth/permissions.ts` (seed + `UPDATE roles` verificado en
-BD: `Administrador|t`, `Coordinador|t`, `Supervisor|t`, `Técnico|t`,
-`Consulta|f`). `.env` **no** fue tocado: el `true` sólo existió en el contenedor
-temporal `ops-backend-ia03` (`http://localhost:4001`).
+`backend/src/common/auth/permissions.ts`. No se cambió ningún permiso a mano en
+la BD local: `Administrador|t`, `Coordinador|t`, `Supervisor|t`, `Técnico|t` y
+`Consulta|f` ya salían del mapa canónico; el problema de
+`info@solidocs.com.ar` era una sesión frontend cacheada sin `ai.ticket`, no un
+permiso ausente. `seedRoles()` actualiza roles existentes cuando
+`RUN_SEED=true`; para producción con el seed apagado se agregó la migración
+idempotente `20261124120000-AddAiTicketPermission.ts`, que sólo agrega
+`ai.ticket` a esos cuatro roles (no toca otros permisos ni a Consulta).
+
+Durante la evidencia inicial el `true` del flag existió sólo en el contenedor
+temporal `ops-backend-ia03` (`http://localhost:4001`). Después, a pedido del
+dueño, se agregó `AI_TICKETS_ENABLED=true` al `.env` local (backup
+`backup/.env.pre-ai-tickets-20261119-171621.bak`). El default en código sigue
+siendo `false`.
 
 Endpoints nuevos (controlador propio `AiTicketsController`, no dentro de
 `AiController`):
@@ -874,3 +888,104 @@ Rollback (sin tocar modelo, versión de Ollama ni `num_ctx`):
    se apagó y se volvió a encender durante la prueba de disponibilidad.
 
 No se hizo merge a `main`.
+
+---
+
+## 13. Checklist de producción — configuración que NO viaja con el código
+
+Todo lo de abajo se aprovisiona fuera del repo (`.env.prod`, secret manager o
+override de compose). `.env.example` es la referencia de nombres, **nunca** de
+valores reales. No subir `.env`, `.env.prod`, `backup/` ni tokens.
+
+### 13.1 Arranque, URLs y red
+
+- `NODE_ENV=production`, `PORT=4000`, `BACKEND_PORT=4000`, `FRONTEND_PORT=3000`.
+- `CORS_ORIGINS` con los orígenes HTTPS reales del frontend (separados por
+  coma) y `FRONTEND_URL` con la URL pública. `NEXT_PUBLIC_API_URL` es la URL
+  pública del backend; `NEXT_PUBLIC_INTERNAL_API_URL` la interna usada en SSR.
+  `PORTAL_URL` si el link de login del portal es distinto del default.
+- Red interna tipo `msp_net`. **No publicar el puerto 11434 de Ollama** en el
+  host ni en el router: el backend lo alcanza por `OLLAMA_URL`.
+- El perfil `ai` del compose decide si Ollama levanta. Sin ese perfil el
+  backend arranca igual y `/api/ai/health` da 404.
+- Reserva de GPU / `NVIDIA_VISIBLE_DEVICES` sólo si el host tiene un driver
+  compatible; en esta notebook se validó con `ollama/ollama:0.9.2`. No cambiar
+  versión, modelo ni `num_ctx` sin autorización (§11.2).
+
+### 13.2 PostgreSQL, Redis y MinIO
+
+- Contenedor: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
+  `POSTGRES_PORT`. Backend: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`,
+  `DB_NAME`. Si hay TLS: `DB_SSL=true` junto con `NODE_ENV=production`.
+- Pool: `DB_POOL_MAX`, `DB_POOL_IDLE`, `DB_POOL_TIMEOUT`. `DB_LOGGING=false`
+  en producción (el default ya es false).
+- **Backup verificado antes de migrar** (`pg_dump -Fc` + `pg_restore --list`,
+  y MinIO si aplica; ver §5 y `docs/MIGRATION-BACKUP.md`). No hay gate de
+  producción aprobado sin esa evidencia.
+- Ejecutar migraciones con el `DataSource` del repo (incluye
+  `20261124120000-AddAiTicketPermission.ts`):
+  `cd backend && node -r ts-node/register -r tsconfig-paths/register node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts`
+- `RUN_SEED=false` en producción (o `true` sólo en el primer boot). Con seed
+  apagado, la migración es la que garantiza `ai.ticket` en roles ya existentes.
+  Verificar: `select name, jsonb_exists(permissions, 'ai.ticket') from roles;`
+  → `t` para Administrador, Supervisor, Coordinador y Técnico; `f` para Consulta.
+- Redis: `REDIS_HOST`, `REDIS_PORT` (y la URL interna que arma el backend).
+- MinIO: `MINIO_ENDPOINT`, `MINIO_PORT`, `MINIO_USE_SSL`, `MINIO_ACCESS_KEY`,
+  `MINIO_SECRET_KEY`, `MINIO_BUCKET`, `MINIO_PUBLIC_BASE_URL`; si se usan las
+  credenciales root del contenedor, `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`.
+  El bucket debe existir y las claves no pueden ser los defaults de dev.
+
+### 13.3 Secretos, correo y canales externos
+
+- `JWT_SECRET`, `JWT_REFRESH_SECRET` (valores largos y distintos),
+  `JWT_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`, `JWT_ADMIN_EXPIRES_IN` en segundos
+  (el código les agrega `s`; un número suelto se interpretaría como ms).
+- `ENCRYPTION_SECRET`: valor aleatorio distinto de `JWT_SECRET`. Deriva la
+  AES-256 que cifra las credenciales IMAP/SMTP guardadas en `mailboxes`;
+  cambiarlo invalida esas credenciales.
+- `ZAMMAD_APPLICATION_SECRET` sólo si se migraron usuarios Zammad y se quiere
+  verificar contraseñas Argon2id; si no, dejar vacío.
+- `INBOUND_EMAIL_SECRET` para el webhook `POST /api/email/inbound`; vacío = el
+  endpoint rechaza siempre.
+- WhatsApp: `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
+  `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_GRAPH_BASE_URL`.
+  Vacío desactiva el envío. **El panel de IA nunca envía WhatsApp ni mail:**
+  sólo propone texto y la persona decide con los botones normales del ticket.
+- SMTP/IMAP no son variables de entorno: son filas de `mailboxes` cifradas con
+  `ENCRYPTION_SECRET`. En producción dejar `MAILBOX_WORKER_ENABLED` distinto
+  de `false` sólo si se quiere procesar correo, **no** configurar
+  `MAIL_DEV_OUTBOX` (es un volcado de desarrollo) ni `IMAP_DEBUG_RAW=1`.
+- `LO_CONVERTER_URL` / `LO_CONVERTER_TIMEOUT_MS` si se usa vista previa
+  Office→PDF; vacío desactiva la conversión.
+
+### 13.4 IA / Ollama (asistente dentro del ticket)
+
+- Flags, todos `false` por default:
+  `AI_ENABLED`, `AI_LAB_ENABLED`, `AI_TICKETS_ENABLED`. El panel del ticket
+  exige `AI_ENABLED=true` (módulo andando), permiso `ai.ticket` y
+  `AI_TICKETS_ENABLED=true`; **no** depende de `AI_LAB_ENABLED`, que sólo
+  controla el Laboratorio. Con `AI_TICKETS_ENABLED` apagado los 4 endpoints
+  dan **404** aunque `AI_ENABLED=true`.
+- `AI_CHAT_PROVIDER=ollama`, `AI_EMBED_PROVIDER=ollama` (`mock` sólo para
+  pruebas de cableado), `OLLAMA_URL=http://ollama:11434` (nombre interno del
+  servicio, nunca una IP pública).
+- Valores validados en esta rama, **no cambiar sin autorización**: imagen
+  `ollama/ollama:0.9.2`, chat `qwen3:4b-instruct`, embeddings `bge-m3`,
+  `AI_EMBED_DIM=1024`, `AI_OLLAMA_NUM_CTX=8192`, `AI_MAX_TOKENS=2048`,
+  `AI_CHAT_TIMEOUT_MS=180000`. Los modelos deben bajarse al volumen persistente
+  (`ollama pull`) antes de habilitar el panel en producción.
+- La extensión `vector` la crea la migración
+  `20261118220000-CreateAiVectorExtension.ts` (y de forma idempotente
+  `AiService.onModuleInit`). `ai_usage_log` guarda sólo métricas: **nunca**
+  prompts ni respuestas.
+- Verificación posterior al boot:
+  `GET /api/ai/features` → `aiTicketsEnabled:true`; un ticket con Consulta →
+  403; con flag apagado → 404; timeout → 503 con el mensaje exacto
+  `La IA tardó demasiado, probá de nuevo`.
+
+### 13.5 Apagar el panel en producción
+
+Quitar `AI_TICKETS_ENABLED=true` del entorno del backend y reiniciar. No hace
+falta tocar la BD ni borrar datos: los endpoints vuelven a 404 y el ticket
+sigue igual. Recién si se retira el feature por completo se revierte el código
+y, si se decide, se ejecuta el `down` de la migración de permisos.
