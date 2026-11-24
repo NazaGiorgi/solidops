@@ -982,6 +982,11 @@ valores reales. No subir `.env`, `.env.prod`, `backup/` ni tokens.
   `GET /api/ai/features` → `aiTicketsEnabled:true`; un ticket con Consulta →
   403; con flag apagado → 404; timeout → 503 con el mensaje exacto
   `La IA tardó demasiado, probá de nuevo`.
+- **Pendiente (IA 04):** los e2e del panel (`npm run test:e2e`) pasan —4 suites,
+  21 tests— pero el proceso termina con `exit 1` por
+  `A worker process has failed to exit gracefully…`. Es un handle abierto en el
+  teardown del entorno de pruebas, no una falla funcional. Queda pendiente
+  encontrar y cerrar ese worker para que el comando termine con `exit 0`.
 
 ### 13.5 Apagar el panel en producción
 

@@ -35,6 +35,27 @@ interface Relacionado {
   fecha: string;
 }
 
+interface PasoSolucion {
+  texto: string;
+  origen: 'mismo cliente' | 'otro cliente';
+  fuente: { id: string; numero: string; titulo: string };
+}
+
+interface Solucion {
+  sinAntecedentes: boolean;
+  motivo?: string;
+  pasos: PasoSolucion[];
+  fuentes: Array<{
+    id: string;
+    numero: string;
+    titulo: string;
+    mismoCliente: boolean;
+    origen: 'mismo cliente' | 'otro cliente';
+    fecha: string;
+  }>;
+  intentos?: number;
+}
+
 interface Props {
   ticketId: string;
   status: string;
@@ -89,6 +110,8 @@ export function TicketAiAssistant({
   const [clasificacion, setClasificacion] = useState<Clasificacion | null>(null);
   const [borrador, setBorrador] = useState('');
   const [borradorError, setBorradorError] = useState('');
+  const [solucion, setSolucion] = useState<Solucion | null>(null);
+  const [pasosCopiados, setPasosCopiados] = useState(false);
   const [relacionados, setRelacionados] = useState<Relacionado[]>([]);
   const [automatico, setAutomatico] = useState(false);
   const [relacionadosCargados, setRelacionadosCargados] = useState(false);
@@ -222,6 +245,29 @@ export function TicketAiAssistant({
       else fallo(e);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function sugerirSolucion() {
+    const r = await ejecutar('solution', () =>
+      api.post<Solucion>(`/ai/tickets/${ticketId}/solution`),
+    );
+    if (r) {
+      setSolucion(r);
+      setPasosCopiados(false);
+    }
+  }
+
+  async function copiarPasos() {
+    const texto = (solucion?.pasos || [])
+      .map((p, i) => `${i + 1}. ${p.texto} [${p.origen}]`)
+      .join('\n');
+    if (!texto) return;
+    try {
+      await navigator.clipboard.writeText(texto);
+      setPasosCopiados(true);
+    } catch {
+      setPasosCopiados(false);
     }
   }
 
@@ -418,6 +464,72 @@ export function TicketAiAssistant({
             )}
           </>
         )}
+      </section>
+
+      {/* IA 04. Sólo lectura: el panel muestra pasos citando tickets cerrados;
+          no escribe en el ticket ni envía mensajes al cliente. */}
+      <section className="ai-section">
+        <div className="flex flex-between" style={{ alignItems: 'center' }}>
+          <h4 style={{ margin: 0 }}>Posible solución</h4>
+          <button className="btn btn-sm" type="button" onClick={sugerirSolucion} disabled={!!busy}>
+            {solucion ? 'Actualizar' : 'Sugerir solución'}
+          </button>
+        </div>
+        {solucion?.sinAntecedentes ? (
+          <div className="notice notice-shadow mt-8">
+            {solucion.motivo || 'No hay antecedentes útiles para proponer pasos.'}
+          </div>
+        ) : solucion ? (
+          <>
+            <ol className="stack mt-8 ai-small" style={{ paddingLeft: 18 }}>
+              {solucion.pasos.map((p, i) => {
+                const mismo = p.origen === 'mismo cliente';
+                return (
+                  <li key={`${p.fuente.id}-${i}`} className="mt-8">
+                    <div>{p.texto}</div>
+                    <div
+                      className="mt-8"
+                      style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
+                    >
+                      <span
+                        style={{
+                          background: mismo ? '#e8f6ee' : '#eef2ff',
+                          color: mismo ? '#1b6b3a' : '#3730a3',
+                          borderRadius: 999,
+                          padding: '2px 8px',
+                          fontSize: 11,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {p.origen}
+                      </span>
+                      <Link href={`/tickets/${p.fuente.id}`} className="link">
+                        {p.fuente.numero || `#${p.fuente.id.slice(0, 8)}`} · {p.fuente.titulo}
+                      </Link>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="flex wrap mt-8" style={{ gap: 6 }}>
+              <button className="btn btn-sm btn-primary" type="button" onClick={copiarPasos}>
+                Copiar pasos
+              </button>
+              <button
+                className="btn btn-sm btn-ghost"
+                type="button"
+                onClick={() => {
+                  setSolucion(null);
+                  setPasosCopiados(false);
+                }}
+              >
+                Descartar
+              </button>
+            </div>
+            {pasosCopiados && <div className="ai-muted mt-8">Pasos copiados al portapapeles.</div>}
+            <div className="ai-muted mt-8">Sólo lectura: no guarda ni envía nada.</div>
+          </>
+        ) : null}
       </section>
 
       <section className="ai-section">
