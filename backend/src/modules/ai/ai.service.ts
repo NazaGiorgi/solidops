@@ -1099,11 +1099,11 @@ export class AiService implements OnModuleInit {
           .map((m) => maskSecrets(cleanTicketText(m.body)))
           .filter((c) => c.length >= 10);
         if (!cuerpos.length) continue;
-        // Relevancia mínima: un ticket cerrado parecido sólo por el texto
-        // full-text pero sin tokens de dominio en común no se usa.
+        // Relevancia mínima: se compara el problema (título/categoría), no el
+        // final del hilo del antecedente, que suele ser sólo "Gracias!".
         const parecido = parecidoTextos(
           textoActual,
-          [fila.title, fila.category, ...cuerpos].filter(Boolean).join(' '),
+          [fila.title, fila.category].filter(Boolean).join(' '),
         );
         if (parecido < SIMILITUD_MINIMA) continue;
         precedentes.push({
