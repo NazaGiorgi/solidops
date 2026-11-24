@@ -37,6 +37,12 @@ export class MailboxWorker {
 
   @Cron('*/1 * * * *')
   async pollAll() {
+    // Interruptor SOLO local: con "false" no se leen casillas ni se ingesta nada.
+    // Si la variable no existe (producción), el worker sigue funcionando igual.
+    if (process.env.MAILBOX_WORKER_ENABLED === 'false') {
+      this.logger.warn('Worker de casillas pausado (MAILBOX_WORKER_ENABLED=false)');
+      return;
+    }
     const mailboxes = await this.service.activeMailboxesForWorker();
     if (mailboxes.length === 0) {
       this.logger.log('Sin casillas activas; worker omitido');
