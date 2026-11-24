@@ -4,6 +4,7 @@ import {
   cosineSimilarity,
   extractJsonObject,
   firstValues,
+  inventaDatoDelHilo,
   isProbablyEnglish,
   normalizeText,
   sinDatosSiCorresponde,
@@ -83,6 +84,9 @@ describe('AI text helpers', () => {
     expect(copiaHiloDelTicket('EQUIPO SOLIDO: Ya estamos revisando.', hilo)).toBe(true);
     expect(copiaHiloDelTicket('Contacto: Adriana\n1️⃣ No tengo internet / la red no anda', hilo)).toBe(true);
     expect(copiaHiloDelTicket('Elegí una opción escribiendo el número.', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('Registramos tu consulta y te avisamos.', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('Estamos fuera de nuestro horario de atención.', hilo)).toBe(true);
+    expect(copiaHiloDelTicket('Puede requerir una plantilla aprobada.', hilo)).toBe(true);
     expect(copiaHiloDelTicket('Ya revisamos el equipo y lo dejamos funcionando.', hilo)).toBe(false);
   });
 
@@ -91,5 +95,24 @@ describe('AI text helpers', () => {
     expect(copiaHiloDelTicket('Texto propio breve.', hilo)).toBe(false);
     expect(copiaHiloDelTicket(hilo, hilo)).toBe(true);
     expect(copiaHiloDelTicket(`Veo que ${hilo} y seguimos`, hilo)).toBe(true);
+  });
+
+  it('rechaza plazos y datos internos inventados', () => {
+    const hilo = 'El técnico dijo que vuelve mañana a primera hora.';
+    expect(inventaDatoDelHilo('Te avisamos en 24 horas.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('Está como prioridad normal en el sistema.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('El estado actual es nuevo.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('La prioridad asignada es normal.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('Le enviamos el TeamViewer.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('Le envié el TeamViewer y ya me conecté.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('El soporte por WhatsApp ha sido activado.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('Por el momento no se ha asignado un técnico.', hilo)).toBe(true);
+    expect(inventaDatoDelHilo('El acceso se envió por correo a [cid:part1@ejemplo].', hilo)).toBe(
+      true,
+    );
+    expect(inventaDatoDelHilo('Te avisamos mañana a primera hora.', hilo)).toBe(false);
+    expect(inventaDatoDelHilo('El técnico indicó que vuelve en 2 horas.', 'vuelve en 2 horas')).toBe(
+      false,
+    );
   });
 });

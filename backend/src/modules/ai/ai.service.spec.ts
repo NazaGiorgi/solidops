@@ -180,6 +180,36 @@ describe('AiService', () => {
     expect(r.intentos).toBe(1);
     expect(recorded[0]).toMatchObject({ feature: 'ticket_reply', ok: true });
     expect(JSON.stringify(recorded[0])).not.toContain('Ya lo revisamos');
+    const prompt = (chat.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('No imites los mensajes automáticos del bot');
+    expect(prompt).toContain('Incluí SOLO hechos que aparezcan en la conversación del ticket');
+  });
+
+  it('replyDraft conserva una frase que empieza con "Hola," y sigue con contenido', async () => {
+    const texto = 'Hola, recibimos tu consulta sobre la red.';
+    const { service } = build(replyProvider([JSON.stringify({ respuesta: texto })]), embedProvider(3));
+    const r = await service.replyDraft('ticket-1', user);
+    expect(r.draft).toContain('Recibimos tu consulta sobre la red.');
+  });
+
+  it('replyDraft omite del contexto los mensajes automáticos del bot', async () => {
+    const chat = replyProvider([JSON.stringify({ respuesta: 'Ya lo revisamos.' })]);
+    const conBot = {
+      ...ticketDePrueba,
+      messages: [
+        { body: 'Hola, necesito ayuda', authorType: TicketAuthorType.CLIENTE },
+        {
+          body: 'Registramos tu consulta. Estamos fuera de horario.',
+          authorType: TicketAuthorType.SISTEMA,
+        },
+      ],
+    } as never;
+    const { service } = build(chat, embedProvider(3), config(), [], undefined, conBot);
+    await service.replyDraft('ticket-1', user);
+    const prompt = (chat.generateJson as jest.Mock).mock.calls[0][0] as string;
+    expect(prompt).toContain('CLIENTE: Hola, necesito ayuda');
+    expect(prompt).not.toContain('BOT: Registramos tu consulta');
+    expect(prompt).not.toContain('Registramos tu consulta. Estamos fuera de horario.');
   });
 
   it('replyDraft reintenta una vez si el modelo copia el hilo', async () => {
@@ -409,7 +439,8 @@ describe('AiService', () => {
     expect(prompt).toContain('Contacto real (base de datos): preceptoria sec -');
     expect(prompt).toContain('CLIENTE: Lo necesitamos urgente');
     expect(prompt).toContain('EQUIPO SOLIDO: Ya lo revisamos');
-    expect(prompt).toContain('EQUIPO SOLIDO: Su solicitud fue recibida');
+    expect(prompt).toContain('BOT: Su solicitud fue recibida');
+    expect(prompt).not.toContain('EQUIPO SOLIDO: Su solicitud fue recibida');
     expect(prompt).not.toContain('Mensaje 1:');
   });
 

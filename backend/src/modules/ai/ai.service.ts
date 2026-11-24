@@ -36,6 +36,7 @@ import {
   cosineSimilarity,
   extractJsonObject,
   firstValues,
+  inventaDatoDelHilo,
   isProbablyEnglish,
   normalizeText,
   sinDatosSiCorresponde,
@@ -589,19 +590,26 @@ export class AiService implements OnModuleInit {
     return Number.isFinite(numero) && numero >= 0 ? Math.round(numero) : 'Sin datos';
   }
 
-  private async ticketContext(id: string, actor: AuthenticatedUser) {
+  private async ticketContext(
+    id: string,
+    actor: AuthenticatedUser,
+    omitirBot = false,
+  ) {
     const ticket = await this.tickets.findOne(id, actor);
     const relacionados = [...(ticket.messages || []), ...(ticket.mergedMessages || [])];
 
-    // El autor sale de la base, no del texto. Sólo dos etiquetas visibles para
-    // el modelo: mensajes del cliente y mensajes del equipo SolidOps (técnico o
-    // sistema). Así no confunde al técnico que escribe con el cliente.
+    // El autor sale de la base, no del texto. Tres etiquetas: CLIENTE (persona),
+    // EQUIPO SOLIDO (técnico humano) y BOT (sistema / mensajes automáticos de
+    // WhatsApp). Los bots nunca se presentan como si hubiera escrito el equipo.
+    // Para el borrador se omiten directamente: así no puede imitarlos.
     const messageBodies = relacionados
+      .filter((m) => !(omitirBot && m.authorType === TicketAuthorType.SISTEMA))
       .map((m) => {
         const body = cleanTicketText(m.body);
         if (!body) return '';
-        const etiqueta =
-          m.authorType === TicketAuthorType.CLIENTE ? 'CLIENTE' : 'EQUIPO SOLIDO';
+        let etiqueta = 'EQUIPO SOLIDO';
+        if (m.authorType === TicketAuthorType.CLIENTE) etiqueta = 'CLIENTE';
+        else if (m.authorType === TicketAuthorType.SISTEMA) etiqueta = 'BOT';
         return `${etiqueta}: ${body.replace(/\n/g, '\n  ')}`;
       })
       .filter(Boolean);
@@ -806,7 +814,7 @@ export class AiService implements OnModuleInit {
     feature = 'ticket_reply',
   ) {
     this.ensureEnabled();
-    const { ticket, text, contacto } = await this.ticketContext(id, user);
+    const { ticket, text, contacto } = await this.ticketContext(id, user, true);
     const automatico = isAutomaticNotice({
       source: ticket.source,
       subjectKey: ticket.subjectKey,
@@ -826,8 +834,14 @@ export class AiService implements OnModuleInit {
     const borradorActual = opciones.borrador?.trim();
     const reglaRespuesta =
       'Escribí SOLO el mensaje que el equipo le enviaría al cliente ahora, de 2 a 5 oraciones. ' +
-      'No copies la conversación. No repitas "CLIENTE:", "EQUIPO SOLIDO:", el menú del bot ' +
+      'No copies la conversación. No repitas "CLIENTE:", "EQUIPO SOLIDO:", "BOT:", el menú del bot ' +
       'ni encabezados copiados como "Cliente:" o "Contacto:". ' +
+      'No imites los mensajes automáticos del bot: el menú de opciones, el aviso de fuera de horario ' +
+      'ni el "Registramos tu consulta" que aparecen etiquetados como BOT:. ' +
+      'Incluí SOLO hechos que aparezcan en la conversación del ticket: no inventes acciones, ' +
+      'horarios, visitas, precios, plazos ni resultados que no estén escritos ahí. ' +
+      'No afirmes que enviaste o resolviste algo si el hilo sólo lo pide o lo menciona como pendiente. ' +
+      'Si hace falta un dato que no está, dejá un marcador visible entre corchetes, por ejemplo [completar horario]. ' +
       'Escribilo en segunda persona, hablándole directamente al cliente: no lo describas en tercera persona. ' +
       'Basate únicamente en el hilo del ticket actual; no reutilices frases de otras conversaciones. ' +
       'Respondé SOLO un JSON válido con la clave "respuesta" y ese mensaje como valor.';
@@ -837,9 +851,9 @@ export class AiService implements OnModuleInit {
         content: mensajeSistema(
           reglaRespuesta +
             '\n\n' +
-            'No inventes horarios, visitas, precios, plazos ni acciones que no estén escritas en el ticket. ' +
-            'Si hace falta un dato que no está, dejá un marcador visible entre corchetes, por ejemplo [completar horario].\n\n' +
-            'No incluyas saludo ni firma: el sistema los agrega con el contacto real de la base y la firma "Equipo Solido".\n\n' +
+            'No incluyas saludo ni firma: el sistema los agrega automáticamente con el contacto real ' +
+            'de la base. No repitas el nombre del contacto ni datos internos (estado, prioridad, ' +
+            'categoría, cliente) en el cuerpo: sólo lo que dice la conversación.\n\n' +
             ajuste +
             (borradorActual ? `\n\nBorrador anterior que hay que ajustar:\n${borradorActual}` : ''),
         ),
@@ -859,11 +873,20 @@ export class AiService implements OnModuleInit {
       const parsed = extractJsonObject(salida);
       return typeof parsed?.respuesta === 'string' ? parsed.respuesta.trim() : '';
     };
+    // El saludo ya incluye el contacto real; el cuerpo no debe repetirlo ni
+    // mencionar la razón social que viene de la base (no está en la conversación).
+    const nombresInternos = [contacto, ticket.customer?.name]
+      .filter((n): n is string => !!n && n.trim().length >= 4)
+      .map((n) => normalizeText(n));
+    const mencionaInternos = (texto: string): boolean =>
+      nombresInternos.some((n) => normalizeText(texto).includes(n));
+    const esInvalida = (texto: string): boolean =>
+      !texto || copiaHiloDelTicket(texto, text) || inventaDatoDelHilo(texto, text) || mencionaInternos(texto);
 
     let result = await generar(messages);
     let respuesta = respuestaDe(result.response);
     let intentos = 1;
-    if (!respuesta || copiaHiloDelTicket(respuesta, text)) {
+    if (esInvalida(respuesta)) {
       // Un solo reintento con una instrucción más explícita. No se reintentan
       // errores de red/timeout: esos ya los maneja guardedChat.
       const reintento: ChatMessage[] = [
@@ -871,9 +894,11 @@ export class AiService implements OnModuleInit {
         {
           role: 'user',
           content: conRefuerzo(
-            'La respuesta anterior copió el hilo o salió vacía. Reescribila con palabras propias, ' +
-              'sin transcripto, sin menú del bot y sin encabezados. Debe ser un mensaje nuevo ' +
-              'de 2 a 5 oraciones.\n\nTicket:\n\n' +
+            'La respuesta anterior copió el hilo, invirtió un dato o salió vacía. Reescribila con ' +
+              'palabras propias, sin transcripto, sin menú del bot, sin encabezados, sin repetir ' +
+              'el nombre del contacto y sin plazos ni datos que no estén en el ticket. ' +
+              'Si necesitás un dato, dejá [completar dato]. ' +
+              'Debe ser un mensaje nuevo de 2 a 5 oraciones.\n\nTicket:\n\n' +
               text,
           ),
         },
@@ -882,7 +907,8 @@ export class AiService implements OnModuleInit {
       respuesta = respuestaDe(result.response);
       intentos = 2;
     }
-    if (!respuesta || copiaHiloDelTicket(respuesta, text)) {
+    if (esInvalida(respuesta)) {
+      this.logger.debug(`Borrador rechazado en ${publicTicketNumber(ticket.ticketNumber, ticket.createdAt)}: ${respuesta}`);
       throw new BadRequestException('No se pudo generar un borrador útil, probá de nuevo');
     }
 
@@ -890,12 +916,25 @@ export class AiService implements OnModuleInit {
       .split('\n')
       .map((l) => l.trimEnd())
       .filter((l) => l.trim());
-    if (/^(hola|estimad|buenos? d)/i.test(lineas[0] || '')) lineas = lineas.slice(1);
+    // Sólo se descarta una línea que sea únicamente el saludo ("Hola Nombre,"),
+    // no una frase que empiece con "Hola," y continúe con contenido.
+    if (/^(hola|estimad|buenos? d)[^.!?]{0,60}[,:]$/i.test(lineas[0] || '')) lineas = lineas.slice(1);
+    // Si el modelo puso "Hola," dentro del cuerpo, se quita sólo ese saludo.
+    if (lineas[0]) {
+      lineas[0] = lineas[0]
+        .replace(/^(hola|estimad[oa]?|buenos? d[ií]as?)\s*[,:]?\s*/i, '')
+        .trim()
+        .replace(/^([a-záéíóúñ])/, (c) => c.toUpperCase());
+      if (!lineas[0]) lineas = lineas.slice(1);
+    }
     while (lineas.length && /^(equipo solido|gracias|saludos|atte\.?)/i.test(lineas[lineas.length - 1] || '')) {
       lineas = lineas.slice(0, -1);
     }
     const cuerpo = lineas.join('\n').trim();
-    if (!cuerpo) throw new BadRequestException('No se pudo generar un borrador útil, probá de nuevo');
+    if (!cuerpo) {
+      this.logger.debug(`Borrador sin cuerpo tras quitar saludo y firma: ${respuesta}`);
+      throw new BadRequestException('No se pudo generar un borrador útil, probá de nuevo');
+    }
     const saludo = contacto ? `Hola ${contacto},` : 'Hola,';
     const draft = `${saludo}\n\n${cuerpo}\n\n${FIRMA_BORRADOR}`;
 
@@ -910,14 +949,23 @@ export class AiService implements OnModuleInit {
     };
   }
 
-  // "Posibles relacionados": mismo cliente, últimos 90 días, título/primer
-  // mensaje parecido (FTS de Postgres). No hay tabla de embeddings de tickets,
-  // así que no hay similitud vectorial disponible todavía. Sólo lectura.
+  // Los títulos automáticos de WhatsApp son genéricos ("WhatsApp: Red /
+  // Conectividad") y no discriminan: en esos casos se compara sólo el primer
+  // mensaje real del cliente.
+  private esTituloGenerico(titulo?: string | null): boolean {
+    return /^\s*whatsapp\s*:/i.test(titulo ?? '');
+  }
+
+  // "Posibles relacionados": mismo cliente, ±90 días alrededor de la creación
+  // del ticket abierto, título/primer mensaje parecido (FTS de Postgres). No hay
+  // tabla de embeddings de tickets, así que no hay similitud vectorial todavía.
+  // Sólo lectura.
   async relatedTickets(id: string, user: AuthenticatedUser, feature = 'ticket_related') {
     this.ensureEnabled();
     const inicio = Date.now();
     try {
       const actual = await this.tickets.findOne(id, user);
+      const creado = new Date(actual.createdAt);
       const automatico = isAutomaticNotice({
         source: actual.source,
         subjectKey: actual.subjectKey,
@@ -933,19 +981,22 @@ export class AiService implements OnModuleInit {
 
       let consulta = 'Sin customer_id en el ticket: no se hizo la búsqueda.';
       if (actual.customerId) {
-        const texto = [actual.title, this.primerMensajeCliente(actual)]
+        const tituloComparable = this.esTituloGenerico(actual.title) ? '' : actual.title;
+        const texto = [tituloComparable, this.primerMensajeCliente(actual)]
           .filter(Boolean)
           .join(' ')
           .trim();
         const termino =
           texto.split(/\s+/).find((p) => p.length >= 4)?.replace(/[^\p{L}\p{N}]/gu, '') || texto;
-        // Se devuelve tal cual para que se pueda verificar en el panel qué se buscó.
         consulta =
-          `customer_id = ${actual.customerId} · creados en los últimos 90 días · ` +
+          `customer_id = ${actual.customerId} · ±90 días desde la creación del ticket ` +
+          `(${creado.toISOString()}) · ` +
           `shadow = false · merged_into_id IS NULL · sin avisos automáticos · ` +
-          `to_tsvector('spanish', título + primer mensaje del cliente) @@ ` +
+          `to_tsvector('spanish', título comparable + primer mensaje del cliente) @@ ` +
           `plainto_tsquery('spanish', "${texto || '(sin texto)'}") OR ` +
-          `título/subject_key ILIKE "%${termino}%"`;
+          `título comparable ILIKE "%${termino}%"`;
+        // Esta información va al log del backend en debug, nunca a la interfaz.
+        this.logger.debug(`Consulta de tickets relacionados: ${consulta}`);
         const qb = this.dataSource
           .getRepository(Ticket)
           .createQueryBuilder('t')
@@ -959,8 +1010,9 @@ export class AiService implements OnModuleInit {
           ])
           .where('t.customer_id = :relCustomer', { relCustomer: actual.customerId })
           .andWhere('t.id <> :relId', { relId: id })
-          .andWhere('t.created_at >= :relDesde', {
-            relDesde: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          .andWhere('t.created_at BETWEEN :relDesde AND :relHasta', {
+            relDesde: new Date(creado.getTime() - 90 * 24 * 60 * 60 * 1000),
+            relHasta: new Date(creado.getTime() + 90 * 24 * 60 * 60 * 1000),
           })
           .andWhere('t.shadow = :relShadow', { relShadow: false })
           .andWhere('t.merged_into_id IS NULL');
@@ -972,9 +1024,12 @@ export class AiService implements OnModuleInit {
 
         if (texto) {
           const primerMsg = `(SELECT tm.body FROM ticket_messages tm WHERE tm.ticket_id = t.id AND tm.author_type = 'cliente' ORDER BY tm.created_at ASC LIMIT 1)`;
-          const vector = `to_tsvector('spanish', coalesce(t.title, '') || ' ' || coalesce(${primerMsg}, ''))`;
+          const tituloSql =
+            `CASE WHEN lower(trim(coalesce(t.title, ''))) LIKE 'whatsapp:%' THEN '' ` +
+            `ELSE coalesce(t.title, '') END`;
+          const vector = `to_tsvector('spanish', ${tituloSql} || ' ' || coalesce(${primerMsg}, ''))`;
           qb.andWhere(
-            `(${vector} @@ plainto_tsquery('spanish', :relQ) OR t.title ILIKE :relIlike OR t.subject_key ILIKE :relIlike)`,
+            `(${vector} @@ plainto_tsquery('spanish', :relQ) OR ${tituloSql} ILIKE :relIlike)`,
             { relQ: texto, relIlike: `%${termino}%` },
           );
           qb.addSelect(`ts_rank(${vector}, plainto_tsquery('spanish', :relQ))`, 'rel_rank');
@@ -1010,7 +1065,6 @@ export class AiService implements OnModuleInit {
       return {
         ticket: this.ticketSnapshot(actual),
         automaticNotice: automatico,
-        consulta,
         related: relacionados,
         metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
       };

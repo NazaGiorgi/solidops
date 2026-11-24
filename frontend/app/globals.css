@@ -1173,16 +1173,6 @@ body {
 .ai-small {
   font-size: 12px;
 }
-.ai-consulta {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-muted);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
-  overflow-wrap: anywhere;
-}
 .ai-draft {
   white-space: pre-wrap;
   font-size: 13px;

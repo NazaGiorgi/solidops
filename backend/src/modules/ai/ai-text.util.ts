@@ -158,9 +158,20 @@ export function copiaHiloDelTicket(respuesta: string, hilo: string): boolean {
   if (/\bequipo\s+solid[oa]\s*:/i.test(salida)) return true;
   if (/(^|\n)\s*[1-9](?:\uFE0F)?\u20E3\s+\S/m.test(salida)) return true;
   if (/(^|\n)\s*[1-9][\).-]\s+\S/m.test(salida)) return true;
-  if (normalizeText(salida).includes('elegi una opcion escribiendo el numero')) return true;
+  const normalizada = normalizeText(salida);
+  if (/\[cid:/i.test(salida) || normalizada.includes('cid part')) return true;
+  if (normalizada.includes('elegi una opcion escribiendo el numero')) return true;
+  // Frases propias de los mensajes automáticos del bot: nunca van en un
+  // borrador escrito por el equipo, aunque el modelo las inventara de memoria.
+  if (
+    /(registramos tu consulta|fuera de (nuestro )?horario de atencion|plantilla aprobada|no se pudo enviar por whatsapp)/.test(
+      normalizada,
+    )
+  ) {
+    return true;
+  }
 
-  const palabrasSalida = normalizeText(salida).split(/\s+/).filter(Boolean);
+  const palabrasSalida = normalizada.split(/\s+/).filter(Boolean);
   const palabrasHilo = normalizeText(hilo).split(/\s+/).filter(Boolean);
   const N = 16;
   if (palabrasSalida.length < N || palabrasHilo.length < N) return false;
@@ -173,4 +184,22 @@ export function copiaHiloDelTicket(respuesta: string, hilo: string): boolean {
     if (secuencias.has(palabrasSalida.slice(i, i + N).join(' '))) return true;
   }
   return false;
+}
+
+// El modelo tiende a completar plazos con números genéricos ("24 horas"). Se
+// permiten sólo si la misma expresión aparece en el hilo del ticket actual.
+// También se descartan datos internos que no son parte de la conversación.
+export function inventaDatoDelHilo(respuesta: string, hilo: string): boolean {
+  const salida = normalizeText(stripThinkTags(respuesta));
+  const contexto = normalizeText(hilo);
+  const plazos = salida.match(/\b\d+\s*(horas?|hs?|minutos?|dias?|semanas?|meses?)\b/g) || [];
+  if (plazos.some((plazo) => !contexto.includes(plazo))) return true;
+  const acciones =
+    salida.match(
+      /\b(?:ya )?(?:le |te |nos |les |se )?(envi[eéo]|enviamos|resolv[ií]|resolvimos|solucion[eé]|solucionamos)\b/g,
+    ) || [];
+  if (acciones.some((accion) => !contexto.includes(accion))) return true;
+  return /prioridad[^.\n]{0,30}(normal|alta|baja|critica)|estado[^.\n]{0,30}\bnuevo\b|contacto (asignado|registrado)|registrado (correctamente )?en el sistema|no se ha asignado un tecnico|soporte por whatsapp (ha sido )?activado|numero de ticket|ticket #\d+/.test(
+    salida,
+  );
 }
