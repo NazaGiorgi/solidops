@@ -44,6 +44,11 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { normalizeSubjectKey } from '../../common/utils/subject-key.util';
 import { publicTicketNumber } from '../../common/utils/ticket-number.util';
 import {
+  collaboratorDiff,
+  collaboratorNoticeMessage,
+  collaboratorAuditValue,
+} from '../../common/utils/ticket-collaborators.util';
+import {
   isAllowedAttachmentMime,
   hasForbiddenExtension,
   ALLOWED_ATTACHMENT_LABEL,
@@ -395,10 +400,8 @@ export class TicketsService {
         }),
       );
     }
-    const beforeIds = new Set(previous.map((c) => c.id));
-    for (const c of collaborators) {
-      if (!beforeIds.has(c.id)) await this.notifyCollaborator(c.id, ticket);
-    }
+    const { added } = collaboratorDiff(previous, collaborators);
+    for (const id of added) await this.notifyCollaborator(id, ticket);
   }
 
   private async notifyCollaborator(technicianId: string, ticket: Ticket): Promise<void> {
@@ -411,7 +414,7 @@ export class TicketsService {
       payload: {
         ticketId: ticket.id,
         title: ticket.title,
-        message: `Te sumaron como colaborador en ${ticketNumber} — ${ticket.title}`,
+        message: collaboratorNoticeMessage(ticketNumber, ticket.title),
       },
     });
   }
@@ -612,8 +615,8 @@ export class TicketsService {
     if (t.contactId !== old.contactId) { changed.contactId = t.contactId; oldVals.contactId = old.contactId; }
     if (t.siteId !== old.siteId) { changed.siteId = t.siteId; oldVals.siteId = old.siteId; }
     if (collaboratorsChanged) {
-      oldVals.collaborators = collabBefore.map((c) => c.name);
-      changed.collaborators = collabAfter.map((c) => c.name);
+      oldVals.collaborators = collaboratorAuditValue(collabBefore);
+      changed.collaborators = collaboratorAuditValue(collabAfter);
     }
 
     if (Object.keys(changed).length > 0) t.lastActivityAt = new Date();
