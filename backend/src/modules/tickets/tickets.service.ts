@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder, ObjectLiteral, In, DataSource } from 'typeorm';
+import { Repository, SelectQueryBuilder, ObjectLiteral, In, DataSource, EntityManager } from 'typeorm';
 import { Ticket } from '../../entities/ticket.entity';
 import { TicketMessage } from '../../entities/ticket-message.entity';
 import { Contact } from '../../entities/contact.entity';
@@ -383,24 +383,50 @@ export class TicketsService {
     return b.every((x) => set.has(x.id));
   }
 
-  // Reemplaza la tabla de colaboradores y avisa sólo a los recién sumados.
+  // Escritura atómica del conjunto de colaboradores. `manager` permite
+  // incluirla en la MISMA transacción que el cambio de responsable; si no se
+  // pasa, abre la suya propia. El borrado y los inserts van juntos: nunca
+  // queda un ticket sin colaboradores por un insert fallido.
+  private async writeCollaborators(
+    manager: EntityManager,
+    ticketId: string,
+    collaborators: Array<{ id: string; name: string }>,
+    actorId: string,
+  ): Promise<void> {
+    const repo = manager.getRepository(TicketTechnician);
+    await repo.delete({ ticketId });
+    for (const c of collaborators) {
+      await repo.save(
+        repo.create({
+          ticketId,
+          technicianId: c.id,
+          addedByUserId: actorId,
+        }),
+      );
+    }
+  }
+
+  // Reemplaza la tabla de colaboradores y devuelve los ids recién sumados para
+  // notificarlos FUERA de la transacción (una notificación no debe revertir el
+  // cambio ya confirmado).
   private async replaceCollaborators(
     ticket: Ticket,
     collaborators: Array<{ id: string; name: string }>,
     previous: Array<{ id: string; name: string }>,
     actor: AuthenticatedUser,
+    manager?: EntityManager,
+  ): Promise<string[]> {
+    const write = (m: EntityManager) =>
+      this.writeCollaborators(m, ticket.id, collaborators, actor.id);
+    if (manager) await write(manager);
+    else await this.dataSource.transaction(write);
+    return collaboratorDiff(previous, collaborators).added;
+  }
+
+  private async notifyNewCollaborators(
+    added: string[],
+    ticket: Ticket,
   ): Promise<void> {
-    await this.ticketTechs.delete({ ticketId: ticket.id });
-    for (const c of collaborators) {
-      await this.ticketTechs.save(
-        this.ticketTechs.create({
-          ticketId: ticket.id,
-          technicianId: c.id,
-          addedByUserId: actor.id,
-        }),
-      );
-    }
-    const { added } = collaboratorDiff(previous, collaborators);
     for (const id of added) await this.notifyCollaborator(id, ticket);
   }
 
@@ -620,11 +646,19 @@ export class TicketsService {
     }
 
     if (Object.keys(changed).length > 0) t.lastActivityAt = new Date();
-    await this.tickets.save(t);
-
-    if (collaboratorsChanged) {
-      await this.replaceCollaborators(t, collabAfter, collabBefore, actor);
-    }
+    // Ticket y colaboradores se escriben en la MISMA transacción: si falla
+    // cualquiera de los inserts, tampoco queda guardado el cambio de
+    // responsable que motivó sacar al colaborador.
+    let addedCollaborators: string[] = [];
+    await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(Ticket).save(t);
+      if (collaboratorsChanged) {
+        addedCollaborators = await this.replaceCollaborators(
+          t, collabAfter, collabBefore, actor, manager,
+        );
+      }
+    });
+    await this.notifyNewCollaborators(addedCollaborators, t);
 
     // Refresh SLA & emit domain audit events for meaningful changes.
     const contract = await this.findActiveContract(t.customerId);
@@ -704,12 +738,15 @@ export class TicketsService {
     t.technicianId = dto.technicianId;
     if (t.status === TicketStatus.NUEVO) t.status = TicketStatus.ASIGNADO;
     t.lastActivityAt = new Date();
-    await this.tickets.save(t);
 
-    // Si el nuevo responsable era colaborador, sale de la lista (regla 1:1).
-    const removed = await this.ticketTechs.delete({
-      ticketId: id,
-      technicianId: dto.technicianId,
+    // Asignar responsable y sacarlo de colaboradores (regla 1:1) es una sola
+    // operación: o se guardan los dos cambios o no se guarda ninguno.
+    const removed = await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(Ticket).save(t);
+      return manager.getRepository(TicketTechnician).delete({
+        ticketId: id,
+        technicianId: dto.technicianId,
+      });
     });
 
     await this.audit.log({

@@ -63,9 +63,15 @@ export class CalendarService {
       });
     }
     if (query.technicianId) {
-      qb.andWhere('(a.technicianId = :techId OR techLinks.technicianId = :techId)', {
-        techId: query.technicianId,
-      });
+      // Filtrar con `techLinks.technicianId` recortaría el leftJoinAndSelect a
+      // SOLO el técnico buscado. EXISTS decide qué citas califican sin tocar
+      // los joins: la cita se devuelve con TODOS sus technicianLinks.
+      qb.andWhere(
+        '(a.technicianId = :techId OR EXISTS (' +
+        'SELECT 1 FROM appointment_technicians atl ' +
+        'WHERE atl.appointment_id = a.id AND atl.technician_id = :techId))',
+        { techId: query.technicianId },
+      );
     }
     if (query.ticketId) qb.andWhere('a.ticketId = :ticketId', { ticketId: query.ticketId });
     const rows = await qb.orderBy('a.startAt', 'ASC').getMany();

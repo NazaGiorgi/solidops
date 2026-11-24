@@ -50,9 +50,14 @@ export class DashboardService {
       .distinct(true);
     // Un técnico secundario (appointment_technicians) también ve su visita del día.
     if (technicianId) {
-      apptQb.andWhere('(a.technician_id = :techId OR links.technician_id = :techId)', {
-        techId: technicianId,
-      });
+      // Igual que en Agenda: EXISTS filtra las citas del día pero NO recorta
+      // `links`, así el técnico ve a los otros técnicos de la misma visita.
+      apptQb.andWhere(
+        '(a.technician_id = :techId OR EXISTS (' +
+        'SELECT 1 FROM appointment_technicians atl ' +
+        'WHERE atl.appointment_id = a.id AND atl.technician_id = :techId))',
+        { techId: technicianId },
+      );
     }
     const appointments = await apptQb.orderBy('a.start_at', 'ASC').getMany();
 

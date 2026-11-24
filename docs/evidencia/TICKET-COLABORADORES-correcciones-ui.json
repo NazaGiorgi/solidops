@@ -1,0 +1,14 @@
+{
+  "subject": "E2E UI 3 tecnicos 1795550700000",
+  "appointmentId": "f1f3a921-2619-4ab0-921e-6091b1ae2bdf",
+  "filtro": "3ceeb0f0-04fc-441e-8899-ad03239ab255",
+  "chipFiltradoMaria": "visita\n02:00 p. m.\n✎\nE2E UI 3 tecnicos 1795550700000\ntécnicos: Nazareno Giorgi, María Técnica, Pedro Técnico\nsin técnico\nAxel\nFelipe\nJoaquín\nMaría Técnica\nNazareno Giorgi\nPedro Técnico",
+  "reporte": {
+    "columnas": [
+      "Técnico",
+      "Responsable",
+      "Como colaborador"
+    ],
+    "filaMaria": "María Técnica\t1\t1"
+  }
+}

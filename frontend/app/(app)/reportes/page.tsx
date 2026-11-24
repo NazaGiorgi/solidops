@@ -59,6 +59,17 @@ export default function ReportsPage() {
     load('all');
   }, [load]);
 
+  // Un mismo técnico puede figurar en las dos columnas: como responsable y
+  // como colaborador. Se muestran ambas sin sumarlas (son cargas distintas).
+  const technicianNames = data
+    ? Array.from(
+        new Set([
+          ...Object.keys(data.byTechnician || {}),
+          ...Object.keys(data.byTechnicianAsCollaborator || {}),
+        ]),
+      ).sort((a, b) => a.localeCompare(b))
+    : [];
+
   return (
     <Shell>
       <PageHeader title="Reportes" subtitle="Distribución de tickets y cumplimiento de SLA" />
@@ -150,6 +161,33 @@ export default function ReportsPage() {
                 .filter(([, v]) => v > 0)
                 .map(([name, value]) => ({ name, value, color: 'var(--blue)' }))}
             />
+          </div>
+          <div className="card mt-16">
+            <h3 className="card-title">Carga por técnico</h3>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Técnico</th>
+                  <th>Responsable</th>
+                  <th>Como colaborador</th>
+                </tr>
+              </thead>
+              <tbody>
+                {technicianNames.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="muted">Sin datos</td>
+                  </tr>
+                ) : (
+                  technicianNames.map((name) => (
+                    <tr key={name}>
+                      <td>{name}</td>
+                      <td>{data?.byTechnician?.[name] ?? 0}</td>
+                      <td>{data?.byTechnicianAsCollaborator?.[name] ?? 0}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </>
       )}
