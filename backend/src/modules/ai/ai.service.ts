@@ -41,7 +41,9 @@ import {
   inventaDatoDelHilo,
   isProbablyEnglish,
   maskSecrets,
+  nombresPropiosExternos,
   normalizeText,
+  parecidoTextos,
   sinDatosSiCorresponde,
   stripThinkTags,
   truncateForContext,
@@ -79,6 +81,9 @@ export interface Precedente {
 
 export interface PasoSolucion {
   texto: string;
+  // El panel lo muestra para que se sepa si el paso viene del mismo cliente o
+  // de un antecedente genérico de otro.
+  origen: 'mismo cliente' | 'otro cliente';
   fuente: { id: string; numero: string; titulo: string };
 }
 
@@ -176,6 +181,10 @@ const SOLUTION_SCHEMA: JsonSchema = {
   },
   required: ['pasos'],
 };
+
+// Piso de parecido entre el ticket actual y un antecedente. Debajo de acá el
+// ticket cerrado se ignora aunque el full-text lo haya traído.
+const SIMILITUD_MINIMA = 0.2;
 
 const ANIMOS = ['tranquilo', 'apurado', 'molesto', 'preocupado', 'neutral'] as const;
 
@@ -1019,7 +1028,8 @@ export class AiService implements OnModuleInit {
 
   // Paso 1 de IA 04. Búsqueda pura en base de datos (sin modelo): tickets
   // cerrados, de personas, con al menos un mensaje del equipo, ordenados con
-  // los del MISMO cliente primero y hasta 5. Todo texto se enmascara antes de
+  // los del MISMO cliente primero y hasta 5. Se descartan los que no tienen un
+  // parecido mínimo con el problema actual. Todo texto se enmascara antes de
   // salir de acá: ninguna contraseña llega al prompt ni al frontend.
   async findPrecedents(id: string, user: AuthenticatedUser, feature = 'ticket_precedents') {
     this.ensureEnabled();
@@ -1027,6 +1037,7 @@ export class AiService implements OnModuleInit {
     try {
       const actual = await this.tickets.findOne(id, user);
       const { texto, termino } = this.textoComparable(actual);
+      const textoActual = [texto, actual.category].filter(Boolean).join(' ');
       const precedentes: Precedente[] = [];
 
       const qb = this.dataSource
@@ -1039,6 +1050,7 @@ export class AiService implements OnModuleInit {
           't.createdAt',
           't.status',
           't.customerId',
+          't.category',
           't.source',
           't.subjectKey',
         ])
@@ -1087,6 +1099,13 @@ export class AiService implements OnModuleInit {
           .map((m) => maskSecrets(cleanTicketText(m.body)))
           .filter((c) => c.length >= 10);
         if (!cuerpos.length) continue;
+        // Relevancia mínima: un ticket cerrado parecido sólo por el texto
+        // full-text pero sin tokens de dominio en común no se usa.
+        const parecido = parecidoTextos(
+          textoActual,
+          [fila.title, fila.category, ...cuerpos].filter(Boolean).join(' '),
+        );
+        if (parecido < SIMILITUD_MINIMA) continue;
         precedentes.push({
           id: fila.id,
           numero: publicTicketNumber(fila.ticketNumber, fila.createdAt),
@@ -1131,12 +1150,14 @@ export class AiService implements OnModuleInit {
     respuesta: string,
     fuentes: Precedente[],
     contexto: string,
-  ): PasoSolucion[] {
+    hiloActual: string,
+  ): { pasos: PasoSolucion[]; descartados: string[] } {
     const parsed = extractJsonObject(respuesta);
     const crudos = Array.isArray(parsed?.pasos) ? parsed.pasos : [];
     const numeros = new Set(fuentes.map((f) => f.numero));
     const vistos = new Set<string>();
     const pasos: PasoSolucion[] = [];
+    const descartados: string[] = [];
     for (const item of crudos) {
       if (typeof item !== 'string') continue;
       const texto = stripThinkTags(item).replace(/\s+/g, ' ').trim();
@@ -1144,19 +1165,33 @@ export class AiService implements OnModuleInit {
       const citas = citasTicket(texto);
       const validas = citas.filter((c) => numeros.has(c));
       // Descarta paso sin fuente o que cite un ticket que no está en la lista.
-      if (!validas.length || validas.length !== citas.length) continue;
-      if (copiaHiloDelTicket(texto, contexto) || inventaDatoDelHilo(texto, contexto)) continue;
+      if (!validas.length || validas.length !== citas.length) {
+        descartados.push(texto);
+        continue;
+      }
+      if (copiaHiloDelTicket(texto, contexto) || inventaDatoDelHilo(texto, contexto)) {
+        descartados.push(texto);
+        continue;
+      }
+      const fuente = fuentes.find((f) => f.numero === validas[0])!;
+      const origen = fuente.mismoCliente ? 'mismo cliente' : 'otro cliente';
+      // Un antecedente de otro cliente se usa sólo en forma genérica: si
+      // arrastra un nombre que no está en el ticket actual, se descarta.
+      if (origen === 'otro cliente' && nombresPropiosExternos(texto, hiloActual).length) {
+        descartados.push(texto);
+        continue;
+      }
       const clave = normalizeText(texto);
       if (vistos.has(clave)) continue;
-      const fuente = fuentes.find((f) => f.numero === validas[0])!;
       pasos.push({
         texto,
+        origen,
         fuente: { id: fuente.id, numero: fuente.numero, titulo: fuente.titulo },
       });
       vistos.add(clave);
       if (pasos.length >= 5) break;
     }
-    return pasos;
+    return { pasos, descartados };
   }
 
   // Paso 2 de IA 04. Sólo lectura: genera pasos a partir de los antecedentes
@@ -1166,6 +1201,11 @@ export class AiService implements OnModuleInit {
     const inicio = Date.now();
     const { ticket, text } = await this.ticketContext(id, user, true);
     const base = { ticket: this.ticketSnapshot(ticket) };
+    // Incluye cliente/contacto de la base para no confundir su nombre con un
+    // nombre propio proveniente de otro cliente.
+    const hiloActual = [text, base.ticket.cliente, base.ticket.contacto]
+      .filter(Boolean)
+      .join(' ');
     const automatico = isAutomaticNotice({
       source: ticket.source,
       subjectKey: ticket.subjectKey,
@@ -1178,6 +1218,7 @@ export class AiService implements OnModuleInit {
         motivo: 'Parece un aviso automático: no se propone solución para el cliente.',
         pasos: [] as PasoSolucion[],
         fuentes: [] as Precedente[],
+        intentos: 0,
         metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
       };
     }
@@ -1195,6 +1236,7 @@ export class AiService implements OnModuleInit {
         motivo: 'No hay antecedentes cerrados con mensajes del equipo que sirvan de fuente.',
         pasos: [] as PasoSolucion[],
         fuentes: [] as Precedente[],
+        intentos: 0,
         metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
       };
     }
@@ -1202,7 +1244,9 @@ export class AiService implements OnModuleInit {
     const contextoFuentes = fuentes
       .map(
         (f, i) =>
-          `FUENTE ${i + 1}: ${f.numero}\nTítulo: ${f.titulo}\n` +
+          `FUENTE ${i + 1}: ${f.numero}\n` +
+          `Cliente de la fuente: ${f.mismoCliente ? 'mismo cliente' : 'otro cliente'}\n` +
+          `Título: ${f.titulo}\n` +
           `Mensajes del equipo (texto enmascarado):\n- ${f.mensajesEquipo.join('\n- ')}`,
       )
       .join('\n\n');
@@ -1213,6 +1257,9 @@ export class AiService implements OnModuleInit {
       'y citar al final su ticket fuente exacto entre paréntesis, por ejemplo ' +
       '"(Fuente: TK-AAAA-NNNNN)". Usá SOLO las fuentes listadas: no inventes datos, ' +
       'horarios, resultados ni acciones que no estén en los mensajes del equipo. ' +
+      'Cuando la fuente sea de OTRO cliente, escribí la acción en forma general: ' +
+      'no incluyas proveedores, IPs, nombres de equipos, personas ni direcciones de ese cliente. ' +
+      'Sólo podés nombrar lo que también aparezca en el ticket actual. ' +
       'No repitas saludos, firmas, menú del bot ni credenciales (ya están enmascaradas). ' +
       'Si una fuente no aporta una acción concreta, ignorala.';
     const messages: ChatMessage[] = [
@@ -1234,22 +1281,29 @@ export class AiService implements OnModuleInit {
       );
 
     let result = await generar(messages);
-    let pasos = this.parsearPasos(result.response, fuentes, contextoFuentes);
+    let parseo = this.parsearPasos(result.response, fuentes, contextoFuentes, hiloActual);
+    let pasos = parseo.pasos;
     let intentos = 1;
-    if (!pasos.length) {
+    // Un solo reintento: sirve tanto si no hubo pasos válidos como si hubo
+    // pasos descartados por citas inválidas o nombres de otro cliente.
+    if (!pasos.length || parseo.descartados.length) {
+      const rechazados = parseo.descartados.slice(0, 5).map((d) => `- ${d}`).join('\n');
       result = await generar([
         ...messages.slice(0, -1),
         {
           role: 'user',
           content: conRefuerzo(
-            'La respuesta anterior no sirvió. Devolvé SOLO el JSON con "pasos": un array de ' +
-              '1 a 5 acciones que empiecen con un verbo y terminen con "(Fuente: TK-AAAA-NNNNN)". ' +
-              'Usá una fuente de la lista, sin inventar nada.\n\n' +
+            'La respuesta anterior no sirvió. Reescribí los pasos rechazados como acciones ' +
+              'generales, sin nombres propios de otros clientes y citando una fuente de la lista. ' +
+              'Devolvé SOLO el JSON con "pasos": un array de 1 a 5 acciones que empiecen con un ' +
+              'verbo y terminen con "(Fuente: TK-AAAA-NNNNN)".\n\n' +
+              (rechazados ? `Pasos rechazados:\n${rechazados}\n\n` : '') +
               `Ticket actual:\n\n${text}\n\nAntecedentes:\n\n${contextoFuentes}`,
           ),
         },
       ]);
-      pasos = this.parsearPasos(result.response, fuentes, contextoFuentes);
+      parseo = this.parsearPasos(result.response, fuentes, contextoFuentes, hiloActual);
+      pasos = parseo.pasos;
       intentos = 2;
     }
 
@@ -1263,10 +1317,12 @@ export class AiService implements OnModuleInit {
         numero: f.numero,
         titulo: f.titulo,
         mismoCliente: f.mismoCliente,
+        origen: f.mismoCliente ? 'mismo cliente' : 'otro cliente',
         fecha: f.fecha,
       })),
       intentos,
-      textoModelo: result.textoModelo,
+      // No devolvemos el texto crudo del modelo: puede contener pasos
+      // rechazados con nombres propios de otro cliente.
       metrics: result.metrics,
       ...(result.aviso ? { aviso: result.aviso } : {}),
     };

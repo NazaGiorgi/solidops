@@ -244,6 +244,46 @@ describe('AiService', () => {
     expect(r.pasos[0].texto).toContain('(Fuente: TK-2026-40033)');
   });
 
+  it('solution descarta nombres de otro cliente y marca el origen de cada paso', async () => {
+    const salida = JSON.stringify({
+      pasos: [
+        'Reiniciar el router y verificar la conexión de red. (Fuente: TK-2026-40033)',
+        'Contactar al soporte técnico de Telered para restablecer el servicio. (Fuente: TK-2026-50000)',
+      ],
+    });
+    const { service } = build(replyProvider([salida]), embedProvider(3));
+    jest.spyOn(service, 'findPrecedents').mockResolvedValue({
+      ticket: ticketDePrueba,
+      precedentes: [
+        {
+          id: 'source-1',
+          numero: 'TK-2026-40033',
+          titulo: 'Sin internet en la oficina',
+          estado: 'cerrado',
+          fecha: new Date('2026-08-25T12:00:00Z').toISOString(),
+          mismoCliente: true,
+          mensajesEquipo: ['Reiniciamos el router y volvió la conexión.'],
+        },
+        {
+          id: 'source-2',
+          numero: 'TK-2026-50000',
+          titulo: 'Sin internet',
+          estado: 'cerrado',
+          fecha: new Date('2026-08-20T12:00:00Z').toISOString(),
+          mismoCliente: false,
+          mensajesEquipo: ['Nos comunicamos con Telered y reiniciamos el router.'],
+        },
+      ],
+    } as never);
+
+    const r = await service.solution('ticket-1', user);
+    expect(r.pasos).toHaveLength(1);
+    expect(r.pasos[0].origen).toBe('mismo cliente');
+    expect(r.pasos[0].texto).not.toContain('Telered');
+    expect(r.intentos).toBe(2);
+    expect(JSON.stringify(r)).not.toContain('Telered');
+  });
+
   it('solution marca sinAntecedentes cuando no hay fuentes útiles', async () => {
     const { service } = build(replyProvider([]), embedProvider(3));
     jest

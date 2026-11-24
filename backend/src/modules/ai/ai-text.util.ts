@@ -205,6 +205,89 @@ export function citasTicket(texto: string): string[] {
   return Array.from(String(texto || '').matchAll(/\bTK-\d{4}-\d+\b/g)).map((m) => m[0]);
 }
 
+const STOP_RELEVANCIA = new Set([
+  'buenas', 'buenos', 'dias', 'tarde', 'gracias', 'hola', 'necesito', 'ayuda',
+  'para', 'por', 'con', 'sin', 'del', 'las', 'los', 'una', 'uno', 'unos', 'unas',
+  'que', 'como', 'cuando', 'donde', 'este', 'esta', 'estos', 'estas', 'ese', 'esa',
+  'tiene', 'tengo', 'sera', 'son', 'fue', 'muy', 'mas', 'menos', 'puede', 'puedo',
+  'podria', 'quisiera', 'consulta', 'consultar', 'solicitud', 'solicitar', 'tema',
+  'caso', 'algo', 'todo', 'toda', 'pasa', 'paso',
+]);
+
+const SINONIMOS: Record<string, string> = {
+  compu: 'computadora',
+  ordenador: 'computadora',
+  internet: 'conectividad',
+  wifi: 'conectividad',
+  impresion: 'impresora',
+  correos: 'correo',
+  mensajes: 'mensaje',
+};
+
+function tokensParaSimilitud(texto: string): Set<string> {
+  const salida = new Set<string>();
+  for (const palabra of normalizeText(texto).split(/\s+/).filter(Boolean)) {
+    const normalizada = SINONIMOS[palabra] ?? palabra;
+    if (normalizada.length < 3 || STOP_RELEVANCIA.has(normalizada)) continue;
+    salida.add(normalizada.endsWith('s') && normalizada.length > 5 ? normalizada.slice(0, -1) : normalizada);
+  }
+  return salida;
+}
+
+// Parecido conservador entre el problema actual y un antecedente. Se usa como
+// piso: si no hay tokens de dominio en común, el antecedente se descarta antes
+// de mandar nada al modelo.
+export function parecidoTextos(actual: string, antecedente: string): number {
+  const a = tokensParaSimilitud(actual);
+  const b = tokensParaSimilitud(antecedente);
+  if (!a.size || !b.size) return 0;
+  let comunes = 0;
+  for (const token of a) if (b.has(token)) comunes += 1;
+  return comunes / Math.min(a.size, b.size);
+}
+
+const PALABRAS_NO_PROPIAS = new Set([
+  'fuente', 'tk', 'mesa', 'ayuda', 'solido', 'solidops', 'lunes', 'martes',
+  'miercoles', 'jueves', 'viernes', 'sabado', 'domingo', 'enero', 'febrero',
+  'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre',
+  'noviembre', 'diciembre',
+]);
+
+// Un paso que viene de OTRO cliente no debe arrastrar nombres propios de ese
+// cliente (proveedor, IP, equipo, persona, dirección). Sólo se permiten si el
+// mismo token aparece en el ticket actual.
+export function nombresPropiosExternos(paso: string, hiloActual: string): string[] {
+  const texto = stripThinkTags(paso)
+    .replace(/\(Fuente:[^)]*\)/gi, '')
+    .trim();
+  const actual = normalizeText(hiloActual);
+  const palabrasActuales = new Set(actual.split(/\s+/).filter(Boolean));
+  const encontrados = new Set<string>();
+  const tokens = texto.split(/\s+/);
+  // El primer token es el verbo que inicia la acción: no es un nombre propio.
+  for (let i = 1; i < tokens.length; i += 1) {
+    const raw = tokens[i].replace(/^[^\p{L}\p{N}@]+|[^\p{L}\p{N}@]+$/gu, '');
+    if (!raw) continue;
+    if (
+      /https?:|\/\//i.test(raw) ||
+      /@/.test(raw) ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(raw) ||
+      /^\d{6,}$/.test(raw)
+    ) {
+      encontrados.add(raw);
+      continue;
+    }
+    if (!/^\p{Lu}/u.test(raw)) continue;
+    const norm = normalizeText(raw);
+    if (norm.length < 3 || PALABRAS_NO_PROPIAS.has(norm)) continue;
+    if (palabrasActuales.has(norm)) continue;
+    const escapado = norm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escapado}\\b`).test(actual)) continue;
+    encontrados.add(raw);
+  }
+  return [...encontrados];
+}
+
 // El modelo tiende a completar plazos con números genéricos ("24 horas"). Se
 // permiten sólo si la misma expresión aparece en el hilo del ticket actual.
 // También se descartan datos internos que no son parte de la conversación.

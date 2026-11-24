@@ -5,10 +5,12 @@ import {
   cosineSimilarity,
   extractJsonObject,
   maskSecrets,
+  nombresPropiosExternos,
   firstValues,
   inventaDatoDelHilo,
   isProbablyEnglish,
   normalizeText,
+  parecidoTextos,
   sinDatosSiCorresponde,
   stripThinkTags,
   truncateForContext,
@@ -136,5 +138,35 @@ describe('AI text helpers', () => {
       'TK-2025-12',
     ]);
     expect(citasTicket('Sin fuente')).toEqual([]);
+  });
+
+  it('mide parecido por tokens de dominio y descarta antecedentes ajenos', () => {
+    expect(
+      parecidoTextos(
+        'Hola, necesito ayuda con la red. Categoría Red / Conectividad',
+        'hola estamos sin internet. Se realizaron pruebas de conectividad y reinicio de router.',
+      ),
+    ).toBeGreaterThanOrEqual(0.2);
+    expect(
+      parecidoTextos(
+        'Necesito ayuda con una factura',
+        'hola estamos sin internet, hay conectividad',
+      ),
+    ).toBe(0);
+  });
+
+  it('detecta nombres propios de otro cliente pero permite los del ticket actual', () => {
+    expect(
+      nombresPropiosExternos(
+        'Contactar a Telered y a Juan Perez en la IP 192.168.1.5. (Fuente: TK-2026-1)',
+        'La computadora de Adriana no abre PDF.',
+      ),
+    ).toEqual(['Telered', 'Juan', 'Perez', '192.168.1.5']);
+    expect(
+      nombresPropiosExternos(
+        'Reiniciar la computadora de Adriana. (Fuente: TK-2026-1)',
+        'Contacto real: Adriana Bastida.',
+      ),
+    ).toEqual([]);
   });
 });

@@ -284,6 +284,7 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
     expect(res.body.pasos.length).toBeGreaterThan(0);
     expect(res.body.pasos[0].texto).toMatch(/\(Fuente: TK-\d{4}-\d+\)/);
     expect(res.body.pasos[0].fuente.id).toBe(ticketRelated.id);
+    expect(res.body.pasos[0].origen).toBe('mismo cliente');
     expect(JSON.stringify(res.body)).not.toContain('supersecreto123');
     expect(res.body.fuentes.map((f: { id: string }) => f.id)).toContain(ticketRelated.id);
     expect(res.body.fuentes.map((f: { id: string }) => f.id)).not.toContain(ticketSinEquipo.id);
