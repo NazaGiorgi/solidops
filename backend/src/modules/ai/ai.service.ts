@@ -10,9 +10,10 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { TicketAuthorType, TicketPriority } from '../../common/enums';
+import { TicketAuthorType, TicketPriority, TicketStatus } from '../../common/enums';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { Ticket } from '../../entities/ticket.entity';
+import { TicketMessage } from '../../entities/ticket-message.entity';
 import {
   excludeAutomaticNotices,
   isAutomaticNotice,
@@ -31,6 +32,7 @@ import {
   JsonSchema,
 } from './ai.types';
 import {
+  citasTicket,
   cleanTicketText,
   copiaHiloDelTicket,
   cosineSimilarity,
@@ -38,6 +40,7 @@ import {
   firstValues,
   inventaDatoDelHilo,
   isProbablyEnglish,
+  maskSecrets,
   normalizeText,
   sinDatosSiCorresponde,
   stripThinkTags,
@@ -60,6 +63,23 @@ export interface ChatView {
   aviso?: string;
   // Texto exacto devuelto por el modelo (sin el prefijo de aviso).
   textoModelo: string;
+}
+
+// Antecedente encontrado SIN IA: ticket cerrado de una persona, con mensajes
+// del equipo y credenciales enmascaradas. Se usa como fuente de la solución.
+export interface Precedente {
+  id: string;
+  numero: string;
+  titulo: string;
+  estado: string;
+  fecha: string;
+  mismoCliente: boolean;
+  mensajesEquipo: string[];
+}
+
+export interface PasoSolucion {
+  texto: string;
+  fuente: { id: string; numero: string; titulo: string };
 }
 
 // Arranca textualmente igual en TODOS los mensajes de sistema del módulo.
@@ -142,6 +162,19 @@ const REPLY_SCHEMA: JsonSchema = {
     },
   },
   required: ['respuesta'],
+};
+
+const SOLUTION_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    pasos: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Entre 1 y 5 acciones concretas. Cada paso cita al final su fuente: (Fuente: TK-AAAA-NNNNN).',
+    },
+  },
+  required: ['pasos'],
 };
 
 const ANIMOS = ['tranquilo', 'apurado', 'molesto', 'preocupado', 'neutral'] as const;
@@ -956,6 +989,289 @@ export class AiService implements OnModuleInit {
     return /^\s*whatsapp\s*:/i.test(titulo ?? '');
   }
 
+  // Comparación compartida por "relacionados" y por la búsqueda de
+  // antecedentes: los títulos genéricos de WhatsApp no discriminan, así que se
+  // usa el primer mensaje real del cliente.
+  private textoComparable(ticket: Awaited<ReturnType<TicketsService['findOne']>>): {
+    texto: string;
+    termino: string;
+  } {
+    const tituloComparable = this.esTituloGenerico(ticket.title) ? '' : ticket.title;
+    const texto = [tituloComparable, this.primerMensajeCliente(ticket)]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const termino =
+      texto.split(/\s+/).find((p) => p.length >= 4)?.replace(/[^\p{L}\p{N}]/gu, '') || texto;
+    return { texto, termino };
+  }
+
+  private sqlTextoComparable(): { titulo: string; vector: string } {
+    const primerMsg = `(SELECT tm.body FROM ticket_messages tm WHERE tm.ticket_id = t.id AND tm.author_type = 'cliente' ORDER BY tm.created_at ASC LIMIT 1)`;
+    const titulo =
+      `CASE WHEN lower(trim(coalesce(t.title, ''))) LIKE 'whatsapp:%' THEN '' ` +
+      `ELSE coalesce(t.title, '') END`;
+    return {
+      titulo,
+      vector: `to_tsvector('spanish', ${titulo} || ' ' || coalesce(${primerMsg}, ''))`,
+    };
+  }
+
+  // Paso 1 de IA 04. Búsqueda pura en base de datos (sin modelo): tickets
+  // cerrados, de personas, con al menos un mensaje del equipo, ordenados con
+  // los del MISMO cliente primero y hasta 5. Todo texto se enmascara antes de
+  // salir de acá: ninguna contraseña llega al prompt ni al frontend.
+  async findPrecedents(id: string, user: AuthenticatedUser, feature = 'ticket_precedents') {
+    this.ensureEnabled();
+    const inicio = Date.now();
+    try {
+      const actual = await this.tickets.findOne(id, user);
+      const { texto, termino } = this.textoComparable(actual);
+      const precedentes: Precedente[] = [];
+
+      const qb = this.dataSource
+        .getRepository(Ticket)
+        .createQueryBuilder('t')
+        .select([
+          't.id',
+          't.title',
+          't.ticketNumber',
+          't.createdAt',
+          't.status',
+          't.customerId',
+          't.source',
+          't.subjectKey',
+        ])
+        .where('t.id <> :precedenteId', { precedenteId: id })
+        .andWhere('t.status = :precedenteEstado', { precedenteEstado: TicketStatus.CERRADO })
+        .andWhere('t.shadow = :precedenteShadow', { precedenteShadow: false })
+        .andWhere('t.merged_into_id IS NULL')
+        .andWhere(
+          `EXISTS (SELECT 1 FROM ticket_messages tm WHERE tm.ticket_id = t.id ` +
+            `AND tm.author_type = :precedenteAutor)`,
+          { precedenteAutor: TicketAuthorType.TECNICO },
+        )
+        .addSelect(
+          'CASE WHEN t.customer_id = :precedenteCustomer THEN 0 ELSE 1 END',
+          'mismo_cliente',
+        )
+        .addOrderBy('mismo_cliente', 'ASC')
+        .setParameter('precedenteCustomer', actual.customerId);
+
+      if (!user.permissions?.includes('tickets:assign') && !user.technicianId) {
+        qb.andWhere('t.created_by_user_id = :precedenteUid', { precedenteUid: user.id });
+      }
+      excludeAutomaticNotices(qb, 't', 'precedenteAuto');
+
+      if (texto) {
+        const { vector } = this.sqlTextoComparable();
+        qb.andWhere(
+          `(${vector} @@ plainto_tsquery('spanish', :precedenteQ) OR ` +
+            `CASE WHEN lower(trim(coalesce(t.title, ''))) LIKE 'whatsapp:%' THEN '' ` +
+            `ELSE coalesce(t.title, '') END ILIKE :precedenteIlike)`,
+          { precedenteQ: texto, precedenteIlike: `%${termino}%` },
+        );
+        qb.addSelect(`ts_rank(${vector}, plainto_tsquery('spanish', :precedenteQ))`, 'precedente_rank');
+        qb.addOrderBy('precedente_rank', 'DESC');
+      }
+      qb.addOrderBy('t.created_at', 'DESC').take(5);
+
+      const filas = await qb.getMany();
+      for (const fila of filas) {
+        const mensajes = await this.dataSource.getRepository(TicketMessage).find({
+          where: { ticketId: fila.id, authorType: TicketAuthorType.TECNICO },
+          order: { createdAt: 'ASC' },
+          take: 4,
+        });
+        const cuerpos = mensajes
+          .map((m) => maskSecrets(cleanTicketText(m.body)))
+          .filter((c) => c.length >= 10);
+        if (!cuerpos.length) continue;
+        precedentes.push({
+          id: fila.id,
+          numero: publicTicketNumber(fila.ticketNumber, fila.createdAt),
+          titulo: maskSecrets(fila.title),
+          estado: fila.status,
+          fecha: fila.createdAt.toISOString(),
+          mismoCliente: fila.customerId === actual.customerId && !!actual.customerId,
+          mensajesEquipo: cuerpos,
+        });
+      }
+
+      await this.usage.record({
+        userId: user.id,
+        feature,
+        provider: this.chatProvider.name,
+        model: this.cfg('ai.modelFast', 'qwen3:4b'),
+        tokensIn: 0,
+        tokensOut: 0,
+        durationMs: Date.now() - inicio,
+        tokensPerSecond: null,
+        ok: true,
+      });
+      return { ticket: this.ticketSnapshot(actual), precedentes };
+    } catch (e) {
+      await this.usage.record({
+        userId: user.id,
+        feature,
+        provider: this.chatProvider.name,
+        model: this.cfg('ai.modelFast', 'qwen3:4b'),
+        tokensIn: 0,
+        tokensOut: 0,
+        durationMs: Date.now() - inicio,
+        tokensPerSecond: null,
+        ok: false,
+        errorMessage: (e as Error).message,
+      });
+      throw this.unavailable(e);
+    }
+  }
+
+  private parsearPasos(
+    respuesta: string,
+    fuentes: Precedente[],
+    contexto: string,
+  ): PasoSolucion[] {
+    const parsed = extractJsonObject(respuesta);
+    const crudos = Array.isArray(parsed?.pasos) ? parsed.pasos : [];
+    const numeros = new Set(fuentes.map((f) => f.numero));
+    const vistos = new Set<string>();
+    const pasos: PasoSolucion[] = [];
+    for (const item of crudos) {
+      if (typeof item !== 'string') continue;
+      const texto = stripThinkTags(item).replace(/\s+/g, ' ').trim();
+      if (texto.length < 15 || texto.length > 400) continue;
+      const citas = citasTicket(texto);
+      const validas = citas.filter((c) => numeros.has(c));
+      // Descarta paso sin fuente o que cite un ticket que no está en la lista.
+      if (!validas.length || validas.length !== citas.length) continue;
+      if (copiaHiloDelTicket(texto, contexto) || inventaDatoDelHilo(texto, contexto)) continue;
+      const clave = normalizeText(texto);
+      if (vistos.has(clave)) continue;
+      const fuente = fuentes.find((f) => f.numero === validas[0])!;
+      pasos.push({
+        texto,
+        fuente: { id: fuente.id, numero: fuente.numero, titulo: fuente.titulo },
+      });
+      vistos.add(clave);
+      if (pasos.length >= 5) break;
+    }
+    return pasos;
+  }
+
+  // Paso 2 de IA 04. Sólo lectura: genera pasos a partir de los antecedentes
+  // encontrados sin IA. Nunca guarda mensajes ni envía respuestas.
+  async solution(id: string, user: AuthenticatedUser, feature = 'ticket_solution') {
+    this.ensureEnabled();
+    const inicio = Date.now();
+    const { ticket, text } = await this.ticketContext(id, user, true);
+    const base = { ticket: this.ticketSnapshot(ticket) };
+    const automatico = isAutomaticNotice({
+      source: ticket.source,
+      subjectKey: ticket.subjectKey,
+      messages: ticket.messages?.map((m) => ({ authorType: m.authorType })),
+    });
+    if (automatico) {
+      return {
+        ...base,
+        sinAntecedentes: true,
+        motivo: 'Parece un aviso automático: no se propone solución para el cliente.',
+        pasos: [] as PasoSolucion[],
+        fuentes: [] as Precedente[],
+        metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
+      };
+    }
+
+    const { precedentes } = await this.findPrecedents(id, user, 'ticket_precedents');
+    const fuentes = precedentes.filter(
+      (p) =>
+        p.estado === TicketStatus.CERRADO &&
+        p.mensajesEquipo.some((m) => m.trim().length >= 15),
+    );
+    if (!fuentes.length) {
+      return {
+        ...base,
+        sinAntecedentes: true,
+        motivo: 'No hay antecedentes cerrados con mensajes del equipo que sirvan de fuente.',
+        pasos: [] as PasoSolucion[],
+        fuentes: [] as Precedente[],
+        metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
+      };
+    }
+
+    const contextoFuentes = fuentes
+      .map(
+        (f, i) =>
+          `FUENTE ${i + 1}: ${f.numero}\nTítulo: ${f.titulo}\n` +
+          `Mensajes del equipo (texto enmascarado):\n- ${f.mensajesEquipo.join('\n- ')}`,
+      )
+      .join('\n\n');
+    const reglaPasos =
+      'A partir de los antecedentes cerrados, proponé pasos concretos para el ticket actual. ' +
+      'Devolvé SOLO un JSON válido con la clave "pasos": un array de entre 1 y 5 textos. ' +
+      'Cada paso debe ser una acción breve en español de Argentina, empezar con un verbo ' +
+      'y citar al final su ticket fuente exacto entre paréntesis, por ejemplo ' +
+      '"(Fuente: TK-AAAA-NNNNN)". Usá SOLO las fuentes listadas: no inventes datos, ' +
+      'horarios, resultados ni acciones que no estén en los mensajes del equipo. ' +
+      'No repitas saludos, firmas, menú del bot ni credenciales (ya están enmascaradas). ' +
+      'Si una fuente no aporta una acción concreta, ignorala.';
+    const messages: ChatMessage[] = [
+      { role: 'system', content: mensajeSistema(reglaPasos) },
+      {
+        role: 'user',
+        content: conRefuerzo(
+          `Ticket actual:\n\n${text}\n\nAntecedentes cerrados (texto enmascarado):\n\n${contextoFuentes}`,
+        ),
+      },
+    ];
+    const generar = (mensajes: ChatMessage[]) =>
+      this.guardedChat(
+        mensajes,
+        SOLUTION_SCHEMA,
+        this.cfg('ai.modelSmart', 'qwen3:4b'),
+        user.id,
+        feature,
+      );
+
+    let result = await generar(messages);
+    let pasos = this.parsearPasos(result.response, fuentes, contextoFuentes);
+    let intentos = 1;
+    if (!pasos.length) {
+      result = await generar([
+        ...messages.slice(0, -1),
+        {
+          role: 'user',
+          content: conRefuerzo(
+            'La respuesta anterior no sirvió. Devolvé SOLO el JSON con "pasos": un array de ' +
+              '1 a 5 acciones que empiecen con un verbo y terminen con "(Fuente: TK-AAAA-NNNNN)". ' +
+              'Usá una fuente de la lista, sin inventar nada.\n\n' +
+              `Ticket actual:\n\n${text}\n\nAntecedentes:\n\n${contextoFuentes}`,
+          ),
+        },
+      ]);
+      pasos = this.parsearPasos(result.response, fuentes, contextoFuentes);
+      intentos = 2;
+    }
+
+    return {
+      ...base,
+      sinAntecedentes: pasos.length === 0,
+      motivo: pasos.length ? undefined : 'Las fuentes no permitieron generar un paso útil.',
+      pasos,
+      fuentes: fuentes.map((f) => ({
+        id: f.id,
+        numero: f.numero,
+        titulo: f.titulo,
+        mismoCliente: f.mismoCliente,
+        fecha: f.fecha,
+      })),
+      intentos,
+      textoModelo: result.textoModelo,
+      metrics: result.metrics,
+      ...(result.aviso ? { aviso: result.aviso } : {}),
+    };
+  }
+
   // "Posibles relacionados": mismo cliente, ±90 días alrededor de la creación
   // del ticket abierto, título/primer mensaje parecido (FTS de Postgres). No hay
   // tabla de embeddings de tickets, así que no hay similitud vectorial todavía.
@@ -981,13 +1297,7 @@ export class AiService implements OnModuleInit {
 
       let consulta = 'Sin customer_id en el ticket: no se hizo la búsqueda.';
       if (actual.customerId) {
-        const tituloComparable = this.esTituloGenerico(actual.title) ? '' : actual.title;
-        const texto = [tituloComparable, this.primerMensajeCliente(actual)]
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-        const termino =
-          texto.split(/\s+/).find((p) => p.length >= 4)?.replace(/[^\p{L}\p{N}]/gu, '') || texto;
+        const { texto, termino } = this.textoComparable(actual);
         consulta =
           `customer_id = ${actual.customerId} · ±90 días desde la creación del ticket ` +
           `(${creado.toISOString()}) · ` +
@@ -1023,11 +1333,7 @@ export class AiService implements OnModuleInit {
         excludeAutomaticNotices(qb, 't', 'relAuto');
 
         if (texto) {
-          const primerMsg = `(SELECT tm.body FROM ticket_messages tm WHERE tm.ticket_id = t.id AND tm.author_type = 'cliente' ORDER BY tm.created_at ASC LIMIT 1)`;
-          const tituloSql =
-            `CASE WHEN lower(trim(coalesce(t.title, ''))) LIKE 'whatsapp:%' THEN '' ` +
-            `ELSE coalesce(t.title, '') END`;
-          const vector = `to_tsvector('spanish', ${tituloSql} || ' ' || coalesce(${primerMsg}, ''))`;
+          const { titulo: tituloSql, vector } = this.sqlTextoComparable();
           qb.andWhere(
             `(${vector} @@ plainto_tsquery('spanish', :relQ) OR ${tituloSql} ILIKE :relIlike)`,
             { relQ: texto, relIlike: `%${termino}%` },

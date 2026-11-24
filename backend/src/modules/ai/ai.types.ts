@@ -50,7 +50,9 @@ export interface EmbedResult {
 // Salida con forma fija para resumen/clasificación. Los proveedores que no la
 // soportan simplemente no implementan generateJson y el servicio usa chat.
 export interface JsonSchemaProperty {
-  type: 'string' | 'number' | 'integer' | 'boolean';
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array';
+  // Ollama acepta arrays en `format`; se usa para los pasos de la solución.
+  items?: { type: 'string' };
   enum?: string[];
   description?: string;
 }

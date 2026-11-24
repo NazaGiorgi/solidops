@@ -61,4 +61,11 @@ export class AiTicketsController {
     this.asegurarAcceso(user);
     return this.asistente.related(id, user);
   }
+
+  // IA 04. Sólo propone pasos citando tickets cerrados: no guarda ni envía.
+  @Post(':id/solution')
+  solution(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    this.asegurarAcceso(user);
+    return this.asistente.solution(id, user);
+  }
 }

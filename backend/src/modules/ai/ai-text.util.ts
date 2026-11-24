@@ -189,6 +189,25 @@ export function copiaHiloDelTicket(respuesta: string, hilo: string): boolean {
 // El modelo tiende a completar plazos con números genéricos ("24 horas"). Se
 // permiten sólo si la misma expresión aparece en el hilo del ticket actual.
 // También se descartan datos internos que no son parte de la conversación.
+// Enmascara valores de credenciales antes de mandar antecedentes al modelo o
+// devolverlos al panel. No toca frases donde la palabra aparece sin valor
+// ("Contraseña. Si realizó este cambio...").
+export function maskSecrets(input?: string | null): string {
+  if (!input) return '';
+  return String(input)
+    .replace(/([?&](?:password|pass|pwd|token|access_token|api_key|key|code)=)([^&#\s"']+)/gi, '$1[oculto]')
+    .replace(
+      /\b(contraseña|contrasena|password|clave|pass|pwd|pin|token|code|codigo(?:\s+de\s+verificacion)?)\b[^.\n]{0,40}?(?:(?:es|ser[aí]a)\s+|\s*[:=]\s*)(?:"([^"\n]{3,120})"|'([^'\n]{3,120})'|([^\s,;"']{3,}))/gi,
+      (_match, etiqueta: string) => `${etiqueta}: [oculto]`,
+    );
+}
+
+// Extrae las citas TK-AAAA-NNNNN con las que el modelo debe referenciar cada
+// paso. Se validan contra las fuentes reales antes de devolver la respuesta.
+export function citasTicket(texto: string): string[] {
+  return Array.from(String(texto || '').matchAll(/\bTK-\d{4}-\d+\b/g)).map((m) => m[0]);
+}
+
 export function inventaDatoDelHilo(respuesta: string, hilo: string): boolean {
   const salida = normalizeText(stripThinkTags(respuesta));
   const contexto = normalizeText(hilo);

@@ -66,6 +66,20 @@ export class MockAiProvider implements AiProvider {
         text: JSON.stringify({ respuesta: 'Ya revisamos tu consulta y te avisamos en breve.' }),
       };
     }
+    if (Object.prototype.hasOwnProperty.call(schema.properties, 'pasos')) {
+      // El prompt incluye un ejemplo con placeholder: citar ése dejaría el paso
+      // sin fuente real. Se toma el número de las FUENTE listadas.
+      const fuente =
+        prompt.match(/FUENTE\s+\d+:\s*(TK-\d{4}-\d+)/i)?.[1] ??
+        prompt.match(/TK-\d{4}-\d+/)?.[0] ??
+        'TK-2026-1';
+      return {
+        ...chat,
+        text: JSON.stringify({
+          pasos: [`Reiniciá el equipo y verificá la conexión de red. (Fuente: ${fuente})`],
+        }),
+      };
+    }
     const parsed = extractJsonObject(chat.text) ?? {};
     const result: Record<string, string> = {};
     for (const key of Object.keys(schema.properties)) {

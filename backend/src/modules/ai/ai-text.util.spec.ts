@@ -1,8 +1,10 @@
 import {
+  citasTicket,
   cleanTicketText,
   copiaHiloDelTicket,
   cosineSimilarity,
   extractJsonObject,
+  maskSecrets,
   firstValues,
   inventaDatoDelHilo,
   isProbablyEnglish,
@@ -114,5 +116,25 @@ describe('AI text helpers', () => {
     expect(inventaDatoDelHilo('El técnico indicó que vuelve en 2 horas.', 'vuelve en 2 horas')).toBe(
       false,
     );
+  });
+
+  it('enmascara credenciales sin alterar frases que no tienen valor', () => {
+    expect(maskSecrets('La contraseña es: supersecreto123')).toBe('La contraseña: [oculto]');
+    expect(maskSecrets('password=abc123 y token=xyz789')).toBe(
+      'password: [oculto] y token: [oculto]',
+    );
+    expect(maskSecrets('La clave del wifi es "clave segura 123"')).toBe('La clave: [oculto]');
+    expect(maskSecrets('Contraseña. Si realizó este cambio, no requiere acción.')).toBe(
+      'Contraseña. Si realizó este cambio, no requiere acción.',
+    );
+    expect(maskSecrets('El técnico reinició el router.')).toBe('El técnico reinició el router.');
+  });
+
+  it('extrae sólo citas de ticket con formato TKAAAA-NNNNN', () => {
+    expect(citasTicket('Hicimos X. (Fuente: TK-2026-40033) y TK-2025-12')).toEqual([
+      'TK-2026-40033',
+      'TK-2025-12',
+    ]);
+    expect(citasTicket('Sin fuente')).toEqual([]);
   });
 });

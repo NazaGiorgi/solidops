@@ -9,6 +9,7 @@ import {
   TicketAuthorType,
   TicketChannel,
   TicketPriority,
+  TicketStatus,
 } from '../src/common/enums';
 import { AiUsageLog } from '../src/entities/ai-usage-log.entity';
 import { AuditLog } from '../src/entities/audit-log.entity';
@@ -32,6 +33,7 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
   let contact: Contact;
   let ticket: Ticket;
   let ticketRelated: Ticket;
+  let ticketSinEquipo: Ticket;
   let ticketAutomatico: Ticket;
   let consulta: User;
   let tokenSupervisor: string;
@@ -108,6 +110,15 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
     ticketRelated = await tickets.save(
       tickets.create({
         ...datosTicket,
+        status: TicketStatus.CERRADO,
+        ticketNumber: await nextTicketNumber(),
+        title: 'Sin internet en la oficina',
+      }),
+    );
+    ticketSinEquipo = await tickets.save(
+      tickets.create({
+        ...datosTicket,
+        status: TicketStatus.CERRADO,
         ticketNumber: await nextTicketNumber(),
         title: 'Sin internet en la oficina',
       }),
@@ -133,6 +144,22 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
     await messages.save(
       messages.create({
         ticketId: ticketRelated.id,
+        authorType: TicketAuthorType.CLIENTE,
+        channel: TicketChannel.PORTAL,
+        body: 'No tengo internet desde esta mañana, probé reiniciar el router.',
+      }),
+    );
+    await messages.save(
+      messages.create({
+        ticketId: ticketRelated.id,
+        authorType: TicketAuthorType.TECNICO,
+        channel: TicketChannel.PORTAL,
+        body: 'Reiniciamos el router y volvió la conexión. La clave es: supersecreto123.',
+      }),
+    );
+    await messages.save(
+      messages.create({
+        ticketId: ticketSinEquipo.id,
         authorType: TicketAuthorType.CLIENTE,
         channel: TicketChannel.PORTAL,
         body: 'No tengo internet desde esta mañana, probé reiniciar el router.',
@@ -169,10 +196,12 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
       await ds.getRepository(AiUsageLog).delete({ userId: consulta?.id });
       await ds.getRepository(AuditLog).delete({ entityType: 'ticket', entityId: ticket?.id });
       await ds.query('DELETE FROM ticket_messages WHERE ticket_id = ANY($1)', [
-        [ticket?.id, ticketRelated?.id].filter(Boolean),
+        [ticket?.id, ticketRelated?.id, ticketSinEquipo?.id].filter(Boolean),
       ]);
       await ds.getRepository(TicketMessage).delete({ ticketId: ticketAutomatico?.id });
-      const ids = [ticket?.id, ticketRelated?.id, ticketAutomatico?.id].filter(Boolean);
+      const ids = [ticket?.id, ticketRelated?.id, ticketSinEquipo?.id, ticketAutomatico?.id].filter(
+        Boolean,
+      );
       await ds.query('DELETE FROM sla WHERE ticket_id = ANY($1)', [ids]);
       await ds.query('DELETE FROM audit_logs WHERE entity_type = $1 AND entity_id = ANY($2)', [
         'ticket',
@@ -206,6 +235,7 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
     await api().post(url('classify')).set(authConsulta()).send({}).expect(403);
     await api().post(url('reply-draft')).set(authConsulta()).send({}).expect(403);
     await api().get(url('related')).set(authConsulta()).expect(403);
+    await api().post(url('solution')).set(authConsulta()).send({}).expect(403);
   });
 
   it('resume, clasifica y propone respuesta reutilizando AiService', async () => {
@@ -248,6 +278,17 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
     expect(res.body.message).toContain('aviso automático');
   });
 
+  it('solution propone pasos citando la fuente cerrada y enmascara credenciales', async () => {
+    const res = await api().post(url('solution')).set(authSupervisor()).send({}).expect(201);
+    expect(res.body.sinAntecedentes).toBe(false);
+    expect(res.body.pasos.length).toBeGreaterThan(0);
+    expect(res.body.pasos[0].texto).toMatch(/\(Fuente: TK-\d{4}-\d+\)/);
+    expect(res.body.pasos[0].fuente.id).toBe(ticketRelated.id);
+    expect(JSON.stringify(res.body)).not.toContain('supersecreto123');
+    expect(res.body.fuentes.map((f: { id: string }) => f.id)).toContain(ticketRelated.id);
+    expect(res.body.fuentes.map((f: { id: string }) => f.id)).not.toContain(ticketSinEquipo.id);
+  });
+
   it('registra los features ticket_* sin guardar textos', async () => {
     const registros = await dataSource
       .getRepository(AiUsageLog)
@@ -256,10 +297,18 @@ describe('Asistente IA en tickets e2e (proveedor mock)', () => {
       .andWhere('log.created_at >= :desde', { desde: new Date(Date.now() - 120000) })
       .getMany();
     const features = new Set(registros.map((r) => r.feature));
-    for (const feature of ['ticket_summary', 'ticket_classify', 'ticket_reply', 'ticket_related']) {
+    for (const feature of [
+      'ticket_summary',
+      'ticket_classify',
+      'ticket_reply',
+      'ticket_related',
+      'ticket_precedents',
+      'ticket_solution',
+    ]) {
       expect(features.has(feature)).toBe(true);
     }
     expect(JSON.stringify(registros)).not.toContain('No tengo internet desde esta mañana');
+    expect(JSON.stringify(registros)).not.toContain('supersecreto123');
   });
 
   it('aplicar sugerencia usa el PATCH normal y audita origen IA', async () => {

@@ -212,6 +212,48 @@ describe('AiService', () => {
     expect(prompt).not.toContain('Registramos tu consulta. Estamos fuera de horario.');
   });
 
+  it('solution descarta citas inválidas y devuelve el paso con su fuente', async () => {
+    const salida = JSON.stringify({
+      pasos: [
+        'Reiniciá el router y verificá la conexión de red. (Fuente: TK-2026-99999)',
+        'Reiniciá el router y verificá la conexión de red. (Fuente: TK-2026-40033)',
+      ],
+    });
+    const { service } = build(replyProvider([salida]), embedProvider(3));
+    jest.spyOn(service, 'findPrecedents').mockResolvedValue({
+      ticket: ticketDePrueba,
+      precedentes: [
+        {
+          id: 'source-1',
+          numero: 'TK-2026-40033',
+          titulo: 'Sin internet en la oficina',
+          estado: 'cerrado',
+          fecha: new Date('2026-08-25T12:00:00Z').toISOString(),
+          mismoCliente: true,
+          mensajesEquipo: [
+            'Reiniciamos el router y el equipo volvió a conectarse sin inconvenientes.',
+          ],
+        },
+      ],
+    } as never);
+
+    const r = await service.solution('ticket-1', user);
+    expect(r.sinAntecedentes).toBe(false);
+    expect(r.pasos).toHaveLength(1);
+    expect(r.pasos[0].fuente.numero).toBe('TK-2026-40033');
+    expect(r.pasos[0].texto).toContain('(Fuente: TK-2026-40033)');
+  });
+
+  it('solution marca sinAntecedentes cuando no hay fuentes útiles', async () => {
+    const { service } = build(replyProvider([]), embedProvider(3));
+    jest
+      .spyOn(service, 'findPrecedents')
+      .mockResolvedValue({ ticket: ticketDePrueba, precedentes: [] } as never);
+    const r = await service.solution('ticket-1', user);
+    expect(r.sinAntecedentes).toBe(true);
+    expect(r.pasos).toEqual([]);
+  });
+
   it('replyDraft reintenta una vez si el modelo copia el hilo', async () => {
     const chat = replyProvider([
       JSON.stringify({ respuesta: 'CLIENTE: Hola, necesito ayuda con la red' }),

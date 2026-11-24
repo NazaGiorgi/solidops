@@ -60,4 +60,9 @@ export class AiTicketsService {
     this.ensureTicketsEnabled();
     return this.soloUno(user, id, () => this.ai.relatedTickets(id, user, 'ticket_related'));
   }
+
+  async solution(id: string, user: AuthenticatedUser) {
+    this.ensureTicketsEnabled();
+    return this.soloUno(user, id, () => this.ai.solution(id, user, 'ticket_solution'));
+  }
 }

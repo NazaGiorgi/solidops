@@ -164,6 +164,16 @@ describe('MockAiProvider', () => {
     expect(JSON.parse(result.text).respuesta).toContain('revisamos tu consulta');
   });
 
+  it('devuelve pasos citando la fuente para el schema de la solución', async () => {
+    const provider = new MockAiProvider(config());
+    const result = await provider.generateJson('Ticket fuente TK-2026-40033', {
+      type: 'object',
+      properties: { pasos: { type: 'array', items: { type: 'string' } } },
+      required: ['pasos'],
+    });
+    expect(JSON.parse(result.text).pasos[0]).toContain('(Fuente: TK-2026-40033)');
+  });
+
   it('genera embeddings determinísticos de la dimensión configurada', async () => {
     const provider = new MockAiProvider(config());
     const [a, b, repeated] = (
