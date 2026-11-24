@@ -40,11 +40,20 @@ export class DashboardService {
     const apptQb = this.appointments
       .createQueryBuilder('a')
       .leftJoinAndSelect('a.customer', 'customer')
+      .leftJoinAndSelect('a.technicianLinks', 'links')
+      .leftJoinAndSelect('links.technician', 'linkTech')
+      .leftJoinAndSelect('linkTech.user', 'linkUser')
       .where('a.start_at BETWEEN :start AND :end', {
         start: todayStart,
         end: todayEnd,
+      })
+      .distinct(true);
+    // Un técnico secundario (appointment_technicians) también ve su visita del día.
+    if (technicianId) {
+      apptQb.andWhere('(a.technician_id = :techId OR links.technician_id = :techId)', {
+        techId: technicianId,
       });
-    if (technicianId) apptQb.andWhere('a.technician_id = :techId', { techId: technicianId });
+    }
     const appointments = await apptQb.orderBy('a.start_at', 'ASC').getMany();
 
     // My assigned active tickets.
@@ -55,7 +64,12 @@ export class DashboardService {
       .where('t.status IN (:...statuses)', { statuses: openStatuses })
       .andWhere('t.shadow = :sh', { sh: false });
     if (technicianId) {
-      myTicketsQb.andWhere('t.technician_id = :techId', { techId: technicianId });
+      // Responsable O colaborador; el rol se marca en la respuesta.
+      myTicketsQb.andWhere(
+        '(t.technician_id = :techId OR EXISTS (' +
+        'SELECT 1 FROM ticket_technicians tt WHERE tt.ticket_id = t.id AND tt.technician_id = :techId))',
+        { techId: technicianId },
+      );
     } else {
       // Coordinators without a technician profile see all active tickets or the
       // ones they created.
@@ -82,7 +96,13 @@ export class DashboardService {
       const contract = await this.findContract(t.customerId);
       const { sla, status } = this.slaService.compute(t, contract);
       void sla;
-      myTicketsWithSla.push({ ...t, slaStatus: status });
+      myTicketsWithSla.push({
+        ...t,
+        slaStatus: status,
+        collaboratorRole: technicianId
+          ? t.technicianId === technicianId ? 'responsable' : 'colaborador'
+          : null,
+      });
     }
 
     return { appointments, myTickets: myTicketsWithSla, tasks };
@@ -133,11 +153,22 @@ export class DashboardService {
     }
     for (const t of criticalTickets) criticalCount++;
 
-    // Load per-technician open ticket load.
+    // Load per-technician open ticket load. El responsable sigue contando igual;
+    // las colaboraciones se traen en una columna aparte (nunca se mezclan).
     const loadByTech: Record<string, number> = {};
     for (const t of openTickets) {
       if (t.technicianId) loadByTech[t.technicianId] = (loadByTech[t.technicianId] || 0) + 1;
     }
+    const collabRows = await this.tickets.query<Array<{ technicianId: string; count: number }>>(
+      `SELECT tt.technician_id AS "technicianId", COUNT(DISTINCT tt.ticket_id)::int AS count
+       FROM ticket_technicians tt
+       JOIN tickets t ON t.id = tt.ticket_id
+       WHERE t.status = ANY($1) AND t.shadow = false AND t.deleted_at IS NULL
+       GROUP BY tt.technician_id`,
+      [ACTIVE_TICKET_STATUSES],
+    );
+    const collabLoadByTech: Record<string, number> = {};
+    for (const row of collabRows) collabLoadByTech[row.technicianId] = Number(row.count);
 
     // Non-technician config users are skipped for team status display.
     const techConfigUsers = await this.users
@@ -153,6 +184,7 @@ export class DashboardService {
       level: tech.level,
       specialties: tech.specialties,
       load: loadByTech[tech.id] ?? 0,
+      collaboratorLoad: collabLoadByTech[tech.id] ?? 0,
     }));
 
     // --- Agenda summary (today's activities + overdue tasks) ---

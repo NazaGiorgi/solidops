@@ -42,17 +42,33 @@ export class CalendarService {
   ) {}
 
   async getAppointments(query: ListCalendarQuery, actor: AuthenticatedUser) {
-    const where: Record<string, unknown> = {};
+    // El filtro por técnico incluye tanto al respons principal (technician_id)
+    // como a los técnicos de appointment_technicians. distinct evita duplicar
+    // una cita cuando el técnico appearing en ambos lados.
+    const qb = this.appointments
+      .createQueryBuilder('a')
+      .leftJoinAndSelect('a.customer', 'customer')
+      .leftJoinAndSelect('a.technician', 'technician')
+      .leftJoinAndSelect('technician.user', 'techUser')
+      .leftJoinAndSelect('a.ticket', 'ticket')
+      .leftJoinAndSelect('a.technicianLinks', 'techLinks')
+      .leftJoinAndSelect('techLinks.technician', 'linkTech')
+      .leftJoinAndSelect('linkTech.user', 'linkUser')
+      .leftJoinAndSelect('a.createdBy', 'createdBy')
+      .distinct(true);
     if (query.from && query.to) {
-      where.startAt = Between(new Date(query.from), new Date(query.to));
+      qb.andWhere('a.startAt BETWEEN :from AND :to', {
+        from: new Date(query.from),
+        to: new Date(query.to),
+      });
     }
-    if (query.technicianId) where.technicianId = query.technicianId;
-    if (query.ticketId) where.ticketId = query.ticketId;
-    const rows = await this.appointments.find({
-      where,
-      relations: { customer: true, technician: { user: true }, ticket: true, technicianLinks: { technician: { user: true } }, createdBy: true },
-      order: { startAt: 'ASC' },
-    });
+    if (query.technicianId) {
+      qb.andWhere('(a.technicianId = :techId OR techLinks.technicianId = :techId)', {
+        techId: query.technicianId,
+      });
+    }
+    if (query.ticketId) qb.andWhere('a.ticketId = :ticketId', { ticketId: query.ticketId });
+    const rows = await qb.orderBy('a.startAt', 'ASC').getMany();
     // Privacidad: los eventos privados solo se muestran a su creador. Los que no
     // tienen created_by_user_id (históricos) y son privados no se muestran a nadie
     // (no hay dueño que verificar).
@@ -121,6 +137,23 @@ export class CalendarService {
     }
   }
 
+  // Reasignar cambia el técnico principal SIN borrar a los secundarios: se saca
+  // el link del responsable anterior y se asegura el del nuevo.
+  private async syncMainTechnicianLink(
+    appointmentId: string,
+    oldMain: string | null | undefined,
+    newMain: string | null | undefined,
+  ): Promise<void> {
+    if (oldMain && oldMain !== newMain) {
+      await this.appointmentTechs.delete({ appointmentId, technicianId: oldMain });
+    }
+    if (newMain) {
+      await this.appointmentTechs.save(
+        this.appointmentTechs.create({ appointmentId, technicianId: newMain }),
+      );
+    }
+  }
+
   async moveAppointment(id: string, dto: MoveAppointmentDto, actor: AuthenticatedUser) {
     const appt = await this.appointments.findOne({ where: { id } });
     if (!appt) throw new NotFoundException('Turno no encontrado');
@@ -129,6 +162,9 @@ export class CalendarService {
     appt.endAt = new Date(dto.endAt);
     if (dto.technicianId !== undefined) appt.technicianId = dto.technicianId;
     const saved = await this.appointments.save(appt);
+    if (dto.technicianId !== undefined && old.technicianId !== saved.technicianId) {
+      await this.syncMainTechnicianLink(saved.id, old.technicianId, saved.technicianId);
+    }
     await this.audit.log({
       user: actor,
       action: AuditAction.UPDATE,
@@ -170,6 +206,8 @@ export class CalendarService {
     if (dto.technicianIds !== undefined) {
       const main = dto.technicianId !== undefined ? dto.technicianId : saved.technicianId;
       await this.replaceTechnicianLinks(saved.id, main, dto.technicianIds);
+    } else if (dto.technicianId !== undefined && old.technicianId !== saved.technicianId) {
+      await this.syncMainTechnicianLink(saved.id, old.technicianId, saved.technicianId);
     }
     await this.audit.log({
       user: actor,

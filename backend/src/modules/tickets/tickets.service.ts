@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder, ObjectLiteral, In, DataSource } from 'typeorm';
 import { Ticket } from '../../entities/ticket.entity';
@@ -14,6 +14,7 @@ import { SavedViewsService } from './saved-views.service';
 import { SavedView } from '../../entities/saved-view.entity';
 import { WorkshopEquipment } from '../../entities/workshop-equipment.entity';
 import { TicketGroup } from '../../entities/ticket-group.entity';
+import { TicketTechnician } from '../../entities/ticket-technician.entity';
 import { PARTICULARS_BUCKET_NAME } from '../workshop/workshop.service';
 import {
   CreateTicketDto,
@@ -65,6 +66,7 @@ export class TicketsService {
     @InjectRepository(Contact) private readonly contacts: Repository<Contact>,
     @InjectRepository(WorkshopEquipment) private readonly workshopEq: Repository<WorkshopEquipment>,
     @InjectRepository(TicketGroup) private readonly groups: Repository<TicketGroup>,
+    @InjectRepository(TicketTechnician) private readonly ticketTechs: Repository<TicketTechnician>,
     private readonly slaService: SlaService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
@@ -112,7 +114,16 @@ export class TicketsService {
     if (query.status) qb.andWhere('t.status IN (:...statuses)', { statuses: query.status.split(',') });
     if (query.priority) qb.andWhere('t.priority = :priority', { priority: query.priority });
     if (query.customerId) qb.andWhere('t.customer_id = :customerId', { customerId: query.customerId });
+    // technicianId sigue significando SOLO responsable (no cambia vistas guardadas
+    // ni conteos). assignedTo es el filtro nuevo: responsable o colaborador.
     if (query.technicianId) qb.andWhere('t.technician_id = :technicianId', { technicianId: query.technicianId });
+    if (query.assignedTo) {
+      qb.andWhere(
+        '(t.technician_id = :assignedTo OR EXISTS (' +
+        'SELECT 1 FROM ticket_technicians tt WHERE tt.ticket_id = t.id AND tt.technician_id = :assignedTo))',
+        { assignedTo: query.assignedTo },
+      );
+    }
     if (query.contactId) qb.andWhere('t.contact_id = :contactId', { contactId: query.contactId });
     if (query.search) {
       qb.andWhere(
@@ -193,13 +204,21 @@ export class TicketsService {
     // ticket de recepción de equipo), se resuelve por lotes el id del equipo y
     // el nombre del contacto real (para el bucket de particulares).
     const workshopByTicketId = await this.workshopLinksForTickets(rows.map((t) => t.id));
+    const collaboratorsByTicketId = await this.collaboratorsForTickets(rows.map((t) => t.id));
 
     // Flatten: attach the most recent SLA status for display.
     const items = rows.map((t) => {
       const latestSla = t.slaRecords?.[0] ?? null;
       const { sla, status } = this.slaService.compute(t, null);
       void sla;
-      return { ...t, slaStatus: latestSla?.status ?? status, workshop: workshopByTicketId.get(t.id) ?? null };
+      const collaborators = collaboratorsByTicketId.get(t.id) ?? [];
+      return {
+        ...t,
+        slaStatus: latestSla?.status ?? status,
+        workshop: workshopByTicketId.get(t.id) ?? null,
+        collaborators,
+        collaboratorCount: collaborators.length,
+      };
     });
     return { items, total, page, pageSize: take };
   }
@@ -289,13 +308,112 @@ export class TicketsService {
       }
     }
 
+    const collaborators = (await this.collaboratorsForTickets([t.id])).get(t.id) ?? [];
     return {
       ...t,
       sla: { ...sla, status },
       mergedChildren,
       mergedMessages,
       workshop: (await this.workshopLinksForTickets([t.id])).get(t.id) ?? null,
+      collaborators,
+      collaboratorCount: collaborators.length,
     };
+  }
+
+  // Colaboradores por lote: { id, name } ordenados por nombre. Se consulta aparte
+  // (en vez de joins en listQuery) para no duplicar filas en la paginación.
+  private async collaboratorsForTickets(
+    ticketIds: string[],
+  ): Promise<Map<string, Array<{ id: string; name: string }>>> {
+    const result = new Map<string, Array<{ id: string; name: string }>>();
+    if (ticketIds.length === 0) return result;
+    const links = await this.ticketTechs.find({
+      where: { ticketId: In(ticketIds) },
+      relations: { technician: { user: true } },
+    });
+    for (const link of links) {
+      const user = (link.technician as unknown as { user?: { name?: string } } | null)?.user;
+      const entry = result.get(link.ticketId) ?? [];
+      entry.push({ id: link.technicianId, name: user?.name || 'Técnico' });
+      result.set(link.ticketId, entry);
+    }
+    for (const list of result.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+    return result;
+  }
+
+  // Valida el conjunto nuevo de colaboradores: sin duplicados, sin responsable,
+  // todos existentes y con usuario activo. Devuelve id -> nombre para auditoría.
+  private async validateCollaborators(
+    ids: string[],
+    responsibleId: string | null,
+  ): Promise<Map<string, string>> {
+    if (new Set(ids).size !== ids.length) {
+      throw new BadRequestException('Hay colaboradores duplicados');
+    }
+    if (responsibleId && ids.includes(responsibleId)) {
+      throw new BadRequestException('El responsable no puede ser colaborador');
+    }
+    const names = new Map<string, string>();
+    if (ids.length === 0) return names;
+    const techs = await this.technicians.find({
+      where: { id: In(ids) },
+      relations: { user: true },
+    });
+    for (const tech of techs) {
+      const user = (tech as unknown as { user?: { active?: boolean; name?: string } }).user;
+      if (!user?.active) {
+        throw new BadRequestException('Sólo se pueden agregar técnicos activos');
+      }
+      names.set(tech.id, user.name || 'Técnico');
+    }
+    if (names.size !== ids.length) {
+      throw new BadRequestException('Alguno de los colaboradores no existe');
+    }
+    return names;
+  }
+
+  private sameIds(a: Array<{ id: string }>, b: Array<{ id: string }>): boolean {
+    if (a.length !== b.length) return false;
+    const set = new Set(a.map((x) => x.id));
+    return b.every((x) => set.has(x.id));
+  }
+
+  // Reemplaza la tabla de colaboradores y avisa sólo a los recién sumados.
+  private async replaceCollaborators(
+    ticket: Ticket,
+    collaborators: Array<{ id: string; name: string }>,
+    previous: Array<{ id: string; name: string }>,
+    actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.ticketTechs.delete({ ticketId: ticket.id });
+    for (const c of collaborators) {
+      await this.ticketTechs.save(
+        this.ticketTechs.create({
+          ticketId: ticket.id,
+          technicianId: c.id,
+          addedByUserId: actor.id,
+        }),
+      );
+    }
+    const beforeIds = new Set(previous.map((c) => c.id));
+    for (const c of collaborators) {
+      if (!beforeIds.has(c.id)) await this.notifyCollaborator(c.id, ticket);
+    }
+  }
+
+  private async notifyCollaborator(technicianId: string, ticket: Ticket): Promise<void> {
+    const userId = await this.userIdOfTech(technicianId);
+    if (!userId) return;
+    const ticketNumber = publicTicketNumber(ticket.ticketNumber, ticket.createdAt);
+    await this.notifications.create({
+      userId,
+      type: NotificationType.TICKET_ASIGNADO,
+      payload: {
+        ticketId: ticket.id,
+        title: ticket.title,
+        message: `Te sumaron como colaborador en ${ticketNumber} — ${ticket.title}`,
+      },
+    });
   }
 
   // Resuelve el enlace a Taller para un conjunto de ticket ids: devuelve por
@@ -439,6 +557,11 @@ export class TicketsService {
 
     const priorTech = t.technicianId;
 
+    // Cambiar colaboradores es equivalente a asignar: hace falta tickets:assign.
+    if (dto.collaboratorIds !== undefined && !actor.permissions.includes('tickets:assign')) {
+      throw new ForbiddenException('No tenés permiso para editar colaboradores');
+    }
+
     if (dto.title !== undefined) t.title = dto.title;
     if (dto.description !== undefined) t.description = dto.description;
     if (dto.category !== undefined) t.category = dto.category;
@@ -455,6 +578,19 @@ export class TicketsService {
         t.resolvedAt = null;
       }
     }
+
+    // Colaboradores: el conjunto nuevo reemplaza al anterior. Si no vino el
+    // campo pero el responsable cambió, sacamos al nuevo responsable de
+    // colaboradores (regla: el responsable nunca figura como colaborador).
+    const collabBefore = (await this.collaboratorsForTickets([id])).get(id) ?? [];
+    let collabAfter = collabBefore;
+    if (dto.collaboratorIds !== undefined) {
+      const names = await this.validateCollaborators(dto.collaboratorIds, t.technicianId);
+      collabAfter = dto.collaboratorIds.map((cid) => ({ id: cid, name: names.get(cid)! }));
+    } else if (t.technicianId && t.technicianId !== priorTech) {
+      collabAfter = collabBefore.filter((c) => c.id !== t.technicianId);
+    }
+    const collaboratorsChanged = !this.sameIds(collabBefore, collabAfter);
 
     // Unify the audit trail: emit ONE value-bearing "update" row carrying the
     // real old/new diff of every field that actually changed (title, category,
@@ -475,9 +611,17 @@ export class TicketsService {
     }
     if (t.contactId !== old.contactId) { changed.contactId = t.contactId; oldVals.contactId = old.contactId; }
     if (t.siteId !== old.siteId) { changed.siteId = t.siteId; oldVals.siteId = old.siteId; }
+    if (collaboratorsChanged) {
+      oldVals.collaborators = collabBefore.map((c) => c.name);
+      changed.collaborators = collabAfter.map((c) => c.name);
+    }
 
     if (Object.keys(changed).length > 0) t.lastActivityAt = new Date();
     await this.tickets.save(t);
+
+    if (collaboratorsChanged) {
+      await this.replaceCollaborators(t, collabAfter, collabBefore, actor);
+    }
 
     // Refresh SLA & emit domain audit events for meaningful changes.
     const contract = await this.findActiveContract(t.customerId);
@@ -491,7 +635,7 @@ export class TicketsService {
         entityId: id,
         oldValue: oldVals,
         newValue: changed,
-        meta: { changedFields: Object.keys(changed) },
+        meta: { changedFields: Object.keys(changed), ...(collaboratorsChanged ? { collaboratorsChanged: true } : {}) },
       });
       // Otros staff ven el cambio (estado/prioridad/asignación/título) en vivo.
       await this.emitTicketUpdatedBroadcast(t);
@@ -559,13 +703,22 @@ export class TicketsService {
     t.lastActivityAt = new Date();
     await this.tickets.save(t);
 
+    // Si el nuevo responsable era colaborador, sale de la lista (regla 1:1).
+    const removed = await this.ticketTechs.delete({
+      ticketId: id,
+      technicianId: dto.technicianId,
+    });
+
     await this.audit.log({
       user: actor,
       action: AuditAction.ASSIGNMENT_CHANGE,
       entityType: AuditEntityType.TICKET,
       entityId: id,
       oldValue: { technicianId: prior },
-      newValue: { technicianId: dto.technicianId },
+      newValue: {
+        technicianId: dto.technicianId,
+        ...(removed.affected ? { removedFromCollaborators: dto.technicianId } : {}),
+      },
     });
     await this.notifyAssignee(dto.technicianId, id, t.title);
     await this.emitTicketUpdatedBroadcast(t);
