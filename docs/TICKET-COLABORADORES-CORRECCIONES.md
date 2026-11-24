@@ -35,17 +35,11 @@ con las columnas `Técnico`, `Responsable` y **`Como colaborador`**. No se suman
 las cargas: son columnas independientes (`byTechnician` vs.
 `byTechnicianAsCollaborator`).
 
-## 2. Pruebas y evidencia
+## 2. Resultados de pruebas
 
 Ejecutadas sobre `ops_msp_e2e` (guard `Test DB isolation OK:
-127.0.0.1:5432/ops_msp_e2e`). Logs completos:
-
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-e2e.log`
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-evidencia.jsonl` (evidencia
-  completa; Jest recorta los `console.log` largos)
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-unitarias.log`
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-tsc-backend.log`
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-tsc-frontend.log`
+127.0.0.1:5432/ops_msp_e2e`). Los artefactos de ejecución se guardan fuera del
+repo, en `backup/`; acá sólo se resumen los resultados.
 
 | Prueba | Resultado |
 |---|---|
@@ -56,10 +50,10 @@ Ejecutadas sobre `ops_msp_e2e` (guard `Test DB isolation OK:
 
 ### 2.1 Notificación a colaboradores nuevos
 
-Ticket `TK-2026-190`; Nazareno no tenía notificaciones antes, tenía **1** después.
+Ticket `TK-2026-198`; Nazareno no tenía notificaciones antes, tenía **1** después.
 Sólo se notifica al recién sumado; María no volvió a recibir otra al quedar
 incluida en el segundo `PATCH`. Mensaje verificado:
-`Te sumaron como colaborador en TK-2026-190 — __e2e colaboradores ...`,
+`Te sumaron como colaborador en TK-2026-198 — __e2e colaboradores ...`,
 tipo `ticket_asignado`.
 
 ### 2.2 403 sin `tickets:assign`
@@ -89,11 +83,6 @@ Se creó por UI (browser real, no por API) la cita
 - En la UI, al filtrar Agenda por **María**, el chip sigue mostrando
   `técnicos: Nazareno Giorgi, María Técnica, Pedro Técnico`.
 
-Evidencia: `docs/evidencia/TICKET-COLABORADORES-correcciones-ui.json` y capturas:
-
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-agenda-creada.png`
-- `docs/evidencia/TICKET-COLABORADORES-correcciones-agenda-filtro-maria-3-tecnicos.png`
-
 ### 2.5 Columna “como colaborador” en reportes
 
 Columnas leídas del DOM: `["Técnico","Responsable","Como colaborador"]`.
@@ -101,8 +90,6 @@ Fila de María: `María Técnica | 1 | 1`.
 En el e2e, el reporte pasó de `María Técnica: 1 → 2` y
 `Nazareno Giorgi: 1 → 2` al sumar una colaboración nueva, sin tocar
 `byTechnician` (responsable).
-
-Captura: `docs/evidencia/TICKET-COLABORADORES-correcciones-reportes-como-colaborador.png`.
 
 ### 2.6 Conteo del filtro `technicianId` antes y después
 

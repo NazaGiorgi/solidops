@@ -88,7 +88,3 @@ backend/reparar-emails-historicos.ts
 # backend/debug/imap-raw/*.eml contiene correos reales de clientes y propios.
 backend/debug/
 *.eml
-
-# Evidencia de pruebas referenciada desde docs/ (logs y capturas de UI)
-!docs/evidencia/*.log
-!docs/evidencia/*.png

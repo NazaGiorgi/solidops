@@ -49,7 +49,7 @@ describe('Ticket colaboradores - correcciones e2e', () => {
   // Jest recorta los console.log largos; el JSONL conserva la evidencia completa.
   const evidenceFile = path.resolve(
     __dirname,
-    '../../docs/evidencia/TICKET-COLABORADORES-correcciones-evidencia.jsonl',
+    '../../backup/evidencia/TICKET-COLABORADORES-correcciones-evidencia.jsonl',
   );
   const evidence = (label: string, data: unknown) => {
     const line = JSON.stringify({ at: new Date().toISOString(), label, data });
