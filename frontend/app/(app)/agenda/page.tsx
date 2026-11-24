@@ -66,6 +66,9 @@ export default function AgendaPage() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState<string | null>(null);
+  // `new Date()` difiere entre SSR y el navegador: no renderizar la etiqueta
+  // de la semana hasta después del mount evita el hydration mismatch.
+  const [mounted, setMounted] = useState(false);
 
   // --- data loading ---------------------------------------------------------
   function rangeFor(mode: ViewMode, a: Date): { from: Date; to: Date; label: string } {
@@ -110,6 +113,8 @@ export default function AgendaPage() {
     api.get<Technician[]>('/technicians').then(setTechnicians).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, anchor, techFilter]);
+
+  useEffect(() => setMounted(true), []);
 
   // --- drag & drop ----------------------------------------------------------
   function onDragStart(e: React.DragEvent, id: string) {
@@ -189,7 +194,7 @@ export default function AgendaPage() {
     <div className="flex wrap">
       <div className="flex">
         <button className="btn btn-sm" onClick={() => shift(-1)}>‹</button>
-        <span style={{ minWidth: 160, textAlign: 'center' }}>{label}</span>
+        <span style={{ minWidth: 160, textAlign: 'center' }}>{mounted ? label : '…'}</span>
         <button className="btn btn-sm" onClick={() => shift(1)}>›</button>
       </div>
       <button className="btn btn-sm" onClick={() => setAnchor(new Date())}>hoy</button>
