@@ -13,6 +13,7 @@ import { SystemSettings } from '../../entities/system-settings.entity';
 import { SavedView } from '../../entities/saved-view.entity';
 import { WorkshopEquipment } from '../../entities/workshop-equipment.entity';
 import { TicketGroup } from '../../entities/ticket-group.entity';
+import { TicketTechnician } from '../../entities/ticket-technician.entity';
 import { TicketsService } from './tickets.service';
 import { TicketsController } from './tickets.controller';
 import { TicketMergeService } from './ticket-merge.service';
@@ -37,6 +38,7 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
       SavedView,
       WorkshopEquipment,
       TicketGroup,
+      TicketTechnician,
     ]),
     NotificationsModule,
     // forwardRef: TicketsService usa WhatsappService (envío saliente) y WhatsappService

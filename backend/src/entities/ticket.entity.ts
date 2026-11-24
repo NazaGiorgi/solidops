@@ -8,6 +8,7 @@ import { User } from './user.entity';
 import { TicketStatus, TicketPriority } from '../common/enums';
 import { TicketMessage } from './ticket-message.entity';
 import { Sla } from './sla.entity';
+import { TicketTechnician } from './ticket-technician.entity';
 
 @Entity('tickets')
 @Index(['customerId'])
@@ -141,4 +142,8 @@ export class Ticket extends SoftDeleteEntity {
 
   @OneToMany(() => Sla, (sla) => sla.ticket)
   slaRecords: Sla[];
+
+  // Técnicos colaboradores (el responsable NO está acá; es technicianId).
+  @OneToMany(() => TicketTechnician, (link) => link.ticket)
+  collaboratorLinks: TicketTechnician[];
 }
