@@ -186,9 +186,6 @@ export function copiaHiloDelTicket(respuesta: string, hilo: string): boolean {
   return false;
 }
 
-// El modelo tiende a completar plazos con números genéricos ("24 horas"). Se
-// permiten sólo si la misma expresión aparece en el hilo del ticket actual.
-// También se descartan datos internos que no son parte de la conversación.
 // Enmascara valores de credenciales antes de mandar antecedentes al modelo o
 // devolverlos al panel. No toca frases donde la palabra aparece sin valor
 // ("Contraseña. Si realizó este cambio...").
@@ -208,6 +205,9 @@ export function citasTicket(texto: string): string[] {
   return Array.from(String(texto || '').matchAll(/\bTK-\d{4}-\d+\b/g)).map((m) => m[0]);
 }
 
+// El modelo tiende a completar plazos con números genéricos ("24 horas"). Se
+// permiten sólo si la misma expresión aparece en el hilo del ticket actual.
+// También se descartan datos internos que no son parte de la conversación.
 export function inventaDatoDelHilo(respuesta: string, hilo: string): boolean {
   const salida = normalizeText(stripThinkTags(respuesta));
   const contexto = normalizeText(hilo);
