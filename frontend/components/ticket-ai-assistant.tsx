@@ -90,6 +90,7 @@ export function TicketAiAssistant({
   const [borrador, setBorrador] = useState('');
   const [borradorError, setBorradorError] = useState('');
   const [relacionados, setRelacionados] = useState<Relacionado[]>([]);
+  const [consultaRelacionados, setConsultaRelacionados] = useState('');
   const [automatico, setAutomatico] = useState(false);
   const [relacionadosCargados, setRelacionadosCargados] = useState(false);
   const relacionadosIniciados = useRef(false);
@@ -171,11 +172,12 @@ export function TicketAiAssistant({
     setBusy('related');
     setError('');
     api
-      .get<{ automaticNotice: boolean; related: Relacionado[] }>(
+      .get<{ automaticNotice: boolean; consulta?: string; related: Relacionado[] }>(
         `/ai/tickets/${ticketId}/related`,
       )
       .then((r) => {
         setAutomatico(!!r.automaticNotice);
+        setConsultaRelacionados(r.consulta || '');
         setRelacionados(r.related || []);
       })
       .catch(fallo)
@@ -422,6 +424,11 @@ export function TicketAiAssistant({
 
       <section className="ai-section">
         <h4 style={{ margin: 0 }}>Posibles relacionados</h4>
+        {consultaRelacionados && (
+          <div className="ai-consulta mt-8" title={consultaRelacionados}>
+            Consulta usada: {consultaRelacionados}
+          </div>
+        )}
         {relacionados.length === 0 ? (
           <div className="ai-muted mt-8">Sin coincidencias en los últimos 90 días.</div>
         ) : (

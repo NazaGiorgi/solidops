@@ -931,11 +931,21 @@ export class AiService implements OnModuleInit {
         fecha: string;
       }> = [];
 
+      let consulta = 'Sin customer_id en el ticket: no se hizo la búsqueda.';
       if (actual.customerId) {
         const texto = [actual.title, this.primerMensajeCliente(actual)]
           .filter(Boolean)
           .join(' ')
           .trim();
+        const termino =
+          texto.split(/\s+/).find((p) => p.length >= 4)?.replace(/[^\p{L}\p{N}]/gu, '') || texto;
+        // Se devuelve tal cual para que se pueda verificar en el panel qué se buscó.
+        consulta =
+          `customer_id = ${actual.customerId} · creados en los últimos 90 días · ` +
+          `shadow = false · merged_into_id IS NULL · sin avisos automáticos · ` +
+          `to_tsvector('spanish', título + primer mensaje del cliente) @@ ` +
+          `plainto_tsquery('spanish', "${texto || '(sin texto)'}") OR ` +
+          `título/subject_key ILIKE "%${termino}%"`;
         const qb = this.dataSource
           .getRepository(Ticket)
           .createQueryBuilder('t')
@@ -963,8 +973,6 @@ export class AiService implements OnModuleInit {
         if (texto) {
           const primerMsg = `(SELECT tm.body FROM ticket_messages tm WHERE tm.ticket_id = t.id AND tm.author_type = 'cliente' ORDER BY tm.created_at ASC LIMIT 1)`;
           const vector = `to_tsvector('spanish', coalesce(t.title, '') || ' ' || coalesce(${primerMsg}, ''))`;
-          const termino =
-            texto.split(/\s+/).find((p) => p.length >= 4)?.replace(/[^\p{L}\p{N}]/gu, '') || texto;
           qb.andWhere(
             `(${vector} @@ plainto_tsquery('spanish', :relQ) OR t.title ILIKE :relIlike OR t.subject_key ILIKE :relIlike)`,
             { relQ: texto, relIlike: `%${termino}%` },
@@ -1002,6 +1010,7 @@ export class AiService implements OnModuleInit {
       return {
         ticket: this.ticketSnapshot(actual),
         automaticNotice: automatico,
+        consulta,
         related: relacionados,
         metrics: { seconds: Number(((Date.now() - inicio) / 1000).toFixed(2)) },
       };
