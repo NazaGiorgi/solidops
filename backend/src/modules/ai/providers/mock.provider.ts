@@ -58,6 +58,14 @@ export class MockAiProvider implements AiProvider {
     opts: ChatOptions = {},
   ): Promise<ChatResult> {
     const chat = await this.chat([{ role: 'user', content: prompt }], opts);
+    // El borrador de respuesta usa este mismo schema; el mock debe devolver
+    // texto propio, no una cadena vacía, para ejercitar la validación real.
+    if (Object.prototype.hasOwnProperty.call(schema.properties, 'respuesta')) {
+      return {
+        ...chat,
+        text: JSON.stringify({ respuesta: 'Ya revisamos tu consulta y te avisamos en breve.' }),
+      };
+    }
     const parsed = extractJsonObject(chat.text) ?? {};
     const result: Record<string, string> = {};
     for (const key of Object.keys(schema.properties)) {

@@ -154,6 +154,16 @@ describe('MockAiProvider', () => {
     expect(result.provider).toBe('mock');
   });
 
+  it('devuelve una respuesta util para el schema del borrador', async () => {
+    const provider = new MockAiProvider(config());
+    const result = await provider.generateJson('ticket', {
+      type: 'object',
+      properties: { respuesta: { type: 'string' } },
+      required: ['respuesta'],
+    });
+    expect(JSON.parse(result.text).respuesta).toContain('revisamos tu consulta');
+  });
+
   it('genera embeddings determinísticos de la dimensión configurada', async () => {
     const provider = new MockAiProvider(config());
     const [a, b, repeated] = (
