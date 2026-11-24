@@ -6,6 +6,7 @@ import { Shell } from '../shell';
 import { PageHeader, Card, Empty, Pill } from '../../../components/ui';
 import { ErrorNotice } from '../../../components/error-notice';
 import { ActivityDetailModal, ModalItem } from '../../../components/activity-detail';
+import { TechnicianMultiSelect } from '../../../components/technician-multi-select';
 import {
   APPOINTMENT_TYPE_LABELS,
   APPOINTMENT_TYPE_PILLS,
@@ -23,6 +24,7 @@ interface Appointment {
   endAt: string;
   technicianId?: string | null;
   technician?: { user?: { name?: string } } | null;
+  technicianLinks?: Array<{ technician?: { user?: { name?: string } } | null }>;
   customer?: { name: string } | null;
   ticket?: { id: string } | null;
   isPrivate?: boolean;
@@ -42,6 +44,14 @@ interface Technician {
 }
 
 type ViewMode = 'day' | 'week' | 'month';
+
+function appointmentTechNames(a: Appointment): string {
+  const linked = (a.technicianLinks ?? [])
+    .map((l) => l.technician?.user?.name)
+    .filter((n): n is string => !!n);
+  if (linked.length) return linked.join(', ');
+  return a.technician?.user?.name || '';
+}
 
 export default function AgendaPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -355,8 +365,8 @@ function DayGrid({
               </div>
               <div style={{ fontWeight: 500, fontSize: 13 }}>{a.subject || 'sin título'}</div>
               {a.customer?.name && <div className="card-meta">{a.customer.name}</div>}
-              {a.technician?.user?.name && (
-                <div className="card-meta">técnico: {a.technician.user.name}</div>
+              {appointmentTechNames(a) && (
+                <div className="card-meta">técnicos: {appointmentTechNames(a)}</div>
               )}
               <select
                 className="select appt-assign"
@@ -454,7 +464,7 @@ function WeekGrid({
               </div>
                   {a.customer?.name && <div className="card-meta">{a.customer.name}</div>}
                   {a.technician?.user?.name && (
-                    <div className="card-meta">técnico: {a.technician.user.name}</div>
+                    <div className="card-meta">técnicos: {appointmentTechNames(a)}</div>
                   )}
                   <select
                     className="select appt-assign"
@@ -555,7 +565,6 @@ function NewAppointment({
   const [form, setForm] = useState({
     type: 'visita',
     subject: '',
-    technicianId: '',
     customerId: '',
     startAt: '',
     endAt: '',
@@ -563,6 +572,7 @@ function NewAppointment({
     reminderMinutes: '0',
     isPrivate: false,
   });
+  const [selectedTechIds, setSelectedTechIds] = useState<string[]>([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -576,7 +586,8 @@ function NewAppointment({
     try {
       await api.post('/appointments', {
         ...form,
-        technicianId: form.technicianId || null,
+        technicianId: selectedTechIds[0] || null,
+        technicianIds: selectedTechIds,
         customerId: form.customerId || null,
         reminderMinutes: Number(form.reminderMinutes) || null,
         isPrivate: !!form.isPrivate,
@@ -609,13 +620,12 @@ function NewAppointment({
           <input className="input" value={form.subject} onChange={(e) => set('subject', e.target.value)} />
         </div>
         <div className="field">
-          <label>Técnico</label>
-          <select className="select" value={form.technicianId} onChange={(e) => set('technicianId', e.target.value)}>
-            <option value="">sin asignar</option>
-            {technicians.map((t) => (
-              <option key={t.id} value={t.id}>{t.user?.name || t.id}</option>
-            ))}
-          </select>
+          <TechnicianMultiSelect
+            technicians={technicians}
+            selected={selectedTechIds}
+            onChange={setSelectedTechIds}
+            label="Técnicos"
+          />
         </div>
         <div className="field">
           <label>Cliente</label>

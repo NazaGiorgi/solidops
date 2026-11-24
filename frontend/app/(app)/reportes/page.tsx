@@ -9,6 +9,7 @@ interface ReportData {
   byStatus: Record<string, number>;
   byPriority: Record<string, number>;
   byTechnician: Record<string, number>;
+  byTechnicianAsCollaborator: Record<string, number>;
   slaStatus: Record<string, number>;
 }
 
@@ -138,10 +139,16 @@ export default function ReportsPage() {
           </div>
           <div className="grid-3 mt-16">
             <PieChartCard
-              title="Carga por técnico"
+              title="Carga por técnico (responsable)"
               data={Object.entries(data.byTechnician || {})
                 .filter(([, v]) => v > 0)
                 .map(([name, value]) => ({ name, value, color: '#2563eb' }))}
+            />
+            <PieChartCard
+              title="Carga como colaborador"
+              data={Object.entries(data.byTechnicianAsCollaborator || {})
+                .filter(([, v]) => v > 0)
+                .map(([name, value]) => ({ name, value, color: 'var(--blue)' }))}
             />
           </div>
         </>

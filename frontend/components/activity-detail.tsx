@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '../lib/api';
 import { ErrorNotice } from './error-notice';
+import { TechnicianMultiSelect } from './technician-multi-select';
 import {
   APPOINTMENT_TYPE_LABELS,
   APPOINTMENT_TYPE_PILLS,
@@ -37,6 +38,7 @@ export function ActivityDetailModal({
   const [customers, setCustomers] = useState<Array<{ id: string; name: string }>>([]);
 
   // appointment fields
+  const [selectedTechIds, setSelectedTechIds] = useState<string[]>([]);
   const [form, setForm] = useState({
     type: 'visita',
     status: 'programado',
@@ -82,9 +84,12 @@ export function ActivityDetailModal({
         const a = await api.get<{
           id: string; type: string; status: string; subject: string | null; notes: string | null;
           customerId: string | null; technicianId: string | null;
+          technicianLinks?: Array<{ technicianId: string }>;
           startAt: string; endAt: string; reminderMinutes: number | null;
           isPrivate?: boolean; createdBy?: { name?: string } | null;
         }>(`/appointments/${item.id}`);
+        const linkedIds = (a.technicianLinks ?? []).map((l) => l.technicianId);
+        setSelectedTechIds(linkedIds.length ? linkedIds : a.technicianId ? [a.technicianId] : []);
         setForm({
           type: a.type || 'visita',
           status: a.status || 'programado',
@@ -130,7 +135,8 @@ export function ActivityDetailModal({
           subject: form.subject || null,
           notes: form.notes || null,
           customerId: form.customerId || null,
-          technicianId: form.technicianId || null,
+          technicianId: selectedTechIds[0] || null,
+          technicianIds: selectedTechIds,
           startAt: new Date(form.startAt).toISOString(),
           endAt: new Date(form.endAt).toISOString(),
           reminderMinutes: Number(form.reminderMinutes) || null,
@@ -288,11 +294,12 @@ export function ActivityDetailModal({
                 </select>
               </div>
               <div className="field">
-                <label>Técnico</label>
-                <select className="select" value={form.technicianId} onChange={(e) => setForm({ ...form, technicianId: e.target.value })}>
-                  <option value="">sin técnico</option>
-                  {technicians.map((t) => <option key={t.id} value={t.id}>{t.user?.name || '—'}</option>)}
-                </select>
+                <TechnicianMultiSelect
+                  technicians={technicians}
+                  selected={selectedTechIds}
+                  onChange={setSelectedTechIds}
+                  label="Técnicos"
+                />
               </div>
             </div>
             <div className="field">

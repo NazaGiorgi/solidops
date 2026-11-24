@@ -33,9 +33,22 @@ export interface TicketListItem {
   customer?: { name?: string } | null;
   technician?: { user?: { name?: string } } | null;
   technicianId?: string | null;
+  collaborators?: Array<{ id: string; name: string }>;
+  collaboratorCount?: number;
   mergedIntoId?: string | null;
   shadow?: boolean;
   workshop?: { equipmentId: string; contactName?: string | null } | null;
+}
+
+// "Pedro +2" con los nombres completos en el tooltip nativo (title).
+export function techCellLabel(t: TicketListItem): { label: string; title: string } {
+  const owner = t.technician?.user?.name || 'sin técnica';
+  const collaborators = t.collaborators ?? [];
+  if (collaborators.length === 0) return { label: owner, title: `Responsable: ${owner}` };
+  return {
+    label: `${owner} +${collaborators.length}`,
+    title: `Responsable: ${owner}\nColaboradores: ${collaborators.map((c) => c.name).join(', ')}`,
+  };
 }
 
 const TITLE_WIDTH_KEY = 'solidops_ticket_title_width';
@@ -208,8 +221,8 @@ export function TicketList({
                 </span>
               )}
             </span>
-            <span className="ticket-cell ticket-cell-tech">
-              {t.technician?.user?.name || 'sin técnica'}
+            <span className="ticket-cell ticket-cell-tech" title={techCellLabel(t).title}>
+              {techCellLabel(t).label}
             </span>
             <span className="ticket-cell ticket-cell-chevron" aria-hidden="true">
               →

@@ -24,6 +24,7 @@ interface Appointment {
   startAt: string;
   endAt: string;
   customer?: { name: string } | null;
+  technicianLinks?: Array<{ technician?: { user?: { name?: string } } | null }>;
 }
 interface Ticket {
   id: string;
@@ -32,6 +33,7 @@ interface Ticket {
   priority: string;
   slaStatus: string;
   customer?: { name: string } | null;
+  collaboratorRole?: 'responsable' | 'colaborador' | null;
 }
 interface Task {
   id: string;
@@ -87,6 +89,11 @@ export default function MyDayPage() {
                         <div className="card-meta">
                           {formatTime(a.startAt)} · {a.customer?.name || '—'}
                         </div>
+                        {(a.technicianLinks?.length ?? 0) > 1 && (
+                          <div className="card-meta">
+                            👤 {a.technicianLinks?.map((l) => l.technician?.user?.name || 'técnico').join(', ')}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -118,6 +125,9 @@ export default function MyDayPage() {
                             <Pill style={SLA_PILLS[t.slaStatus] || 'pill-gray'}>
                               SLA {t.slaStatus || '—'}
                             </Pill>
+                            {t.collaboratorRole === 'colaborador' && (
+                              <Pill style="pill-blue">colaborador</Pill>
+                            )}
                           </div>
                         </div>
                       </div>

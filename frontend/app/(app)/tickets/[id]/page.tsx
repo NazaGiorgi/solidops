@@ -8,6 +8,7 @@ import { Shell } from '../../shell';
 import { PageHeader, Card, Empty, Pill } from '../../../../components/ui';
 import { NotesSection } from '../../../../components/notes-section';
 import { TicketAppointments } from '../../../../components/ticket-appointments';
+import { TechnicianMultiSelect, type TechnicianOption } from '../../../../components/technician-multi-select';
 import { ErrorNotice } from '../../../../components/error-notice';
 import {
   STATUS_PILLS,
@@ -43,6 +44,9 @@ interface TicketDetail {
   site?: { name: string } | null;
   technician?: { id?: string | null; user?: { name?: string } | null } | null;
   technicianId?: string | null;
+  collaborators?: Array<{ id: string; name: string }>;
+  collaboratorCount?: number;
+  collaboratorIds?: string[];
   source?: string;
   shadow?: boolean;
   // Enlace a Taller: presente cuando el ticket está vinculado a un equipo.
@@ -116,7 +120,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   const { user, hasPerm } = useAuth();
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [data, setData] = useState<Partial<TicketDetail>>({});
-  const [technicians, setTechnicians] = useState<Array<{ id: string; user?: { name?: string } }>>([]);
+  const [technicians, setTechnicians] = useState<TechnicianOption[]>([]);
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -148,6 +152,8 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   // Only Supervisor/Coordinador (tickets:assign) may merge tickets; hide the
   // action for Technician instead of showing a button that always 403s.
   const canMerge = hasPerm('tickets:assign');
+  // Asignar responsable y editar colaboradores van juntos.
+  const canAssign = hasPerm('tickets:assign');
 
   // Chequeo de que el cliente es un genérico "Cliente WA ..." autogenerado por
   // WhatsApp. Solo para esos tickets se muestra "Vincular a cliente existente".
@@ -221,6 +227,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           status: d.status,
           priority: d.priority,
           technicianId: d.technician?.id,
+          collaboratorIds: (d.collaborators ?? []).map((c) => c.id),
         });
       }
       // Load merge candidates: other open tickets of the same customer.
@@ -303,7 +310,11 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           closeChildrenIds: chosen,
         });
       } else {
-        await api.patch(`/tickets/${params.id}`, data);
+        // Sin tickets:assign se pueden ver los colaboradores, pero no se
+        // envían cambios (el backend igual devolvería 403).
+        const payload = { ...data };
+        if (!canAssign) delete payload.collaboratorIds;
+        await api.patch(`/tickets/${params.id}`, payload);
         // If it WAS principal+children and now closing, fine; otherwise normal.
       }
       await load();
@@ -588,7 +599,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
             </select>
           </div>
           <div className="field" style={{ marginBottom: 0 }}>
-            <label>Técnico</label>
+            <label>Responsable</label>
             <select
               className="select"
               value={data.technicianId || ''}
@@ -601,6 +612,21 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
                 </option>
               ))}
             </select>
+          </div>
+          <div style={{ minWidth: 220, marginBottom: 0 }}>
+            <TechnicianMultiSelect
+              technicians={[
+                ...technicians,
+                ...(ticket?.collaborators ?? [])
+                  .filter((c) => !technicians.some((t) => t.id === c.id))
+                  .map((c) => ({ id: c.id, name: c.name })),
+              ]}
+              selected={data.collaboratorIds ?? []}
+              onChange={(ids) => setData((d) => ({ ...d, collaboratorIds: ids }))}
+              label="Colaboradores"
+              disabled={!canAssign}
+              placeholder="sin colaboradores"
+            />
           </div>
           <button className="btn btn-primary" onClick={save} disabled={busy}>
             guardar
@@ -944,7 +970,13 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
       )}
       </div>
 
-      <TicketAppointments ticketId={ticket.id} />
+      <TicketAppointments
+        ticketId={ticket.id}
+        initialSelected={[
+          ...(data.technicianId ? [data.technicianId] : []),
+          ...(data.collaboratorIds ?? []),
+        ]}
+      />
       <NotesSection ticketId={ticket.id} />
 
       {/* Conversation thread */}

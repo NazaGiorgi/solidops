@@ -22,6 +22,7 @@ interface GeneralData {
     level: string;
     specialties: string[];
     load: number;
+    collaboratorLoad: number;
   }>;
   agenda: {
     todayAppointments: number;
@@ -126,6 +127,7 @@ export default function DashboardPage() {
                 <th>técnico</th>
                 <th>estado</th>
                 <th className="text-right">carga</th>
+                <th className="text-right">como colaborador</th>
               </tr>
             </thead>
             <tbody>
@@ -139,6 +141,7 @@ export default function DashboardPage() {
                     <Pill style={TECH_STATUS_PILLS[t.status] || 'pill-gray'}>{t.status}</Pill>
                   </td>
                   <td className="text-right" style={{ fontWeight: 600 }}>{t.load}</td>
+                  <td className="text-right">{t.collaboratorLoad ?? 0}</td>
                 </tr>
               ))}
             </tbody>
