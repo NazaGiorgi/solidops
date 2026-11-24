@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pill } from './ui';
 
 export interface TechnicianOption {
@@ -22,6 +22,7 @@ export function TechnicianMultiSelect({
   label = 'Técnicos',
   disabled = false,
   placeholder = 'Elegí de la lista…',
+  closeSignal = 0,
 }: {
   technicians: TechnicianOption[];
   selected: string[];
@@ -29,11 +30,36 @@ export function TechnicianMultiSelect({
   label?: string;
   disabled?: boolean;
   placeholder?: string;
+  // El formulario dueño incrementa este valor al enviar para cerrar la lista.
+  closeSignal?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
   const options = technicians.map((t) => ({ id: t.id, label: technicianName(t) }));
   const filtered = options.filter((o) => !query || o.label.toLowerCase().includes(query.toLowerCase()));
+
+  // Clic afuera y Esc cierran el desplegable sin importar qué formulario lo use.
+  useEffect(() => {
+    if (!open || disabled) return;
+    function onPointerDown(e: PointerEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, disabled]);
+
+  // Enviar el formulario también cierra la lista (ej. botón "crear").
+  useEffect(() => {
+    setOpen(false);
+  }, [closeSignal]);
 
   function toggle(id: string) {
     if (disabled) return;
@@ -43,7 +69,7 @@ export function TechnicianMultiSelect({
   return (
     <div className="field">
       <label>{label} ({selected.length})</label>
-      <div className="multi-select" style={{ position: 'relative' }}>
+      <div className="multi-select" ref={rootRef}>
         <button
           type="button"
           className="input"
@@ -59,11 +85,13 @@ export function TechnicianMultiSelect({
           <span className="card-meta" style={{ float: 'right' }}>▾</span>
         </button>
         {open && !disabled && (
+          // En flujo normal: empuja los campos siguientes hacia abajo en vez de
+          // superponerse a "Fin", "Privado" o los botones del modal.
           <div
             style={{
-              position: 'absolute', left: 0, right: 0, top: 'calc(100% + 2px)',
+              marginTop: 6,
               background: 'var(--surface)', border: '1px solid var(--border)',
-              borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,.08)', zIndex: 20,
+              borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,.08)',
               maxHeight: 220, overflow: 'auto',
             }}
           >

@@ -113,6 +113,7 @@ function AppointmentForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [closeSignal, setCloseSignal] = useState(0);
 
   useEffect(() => {
     api
@@ -123,6 +124,7 @@ function AppointmentForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setCloseSignal((n) => n + 1);
     if (!date || !time) { setError('Elegí fecha y hora'); return; }
     if (selected.length === 0) { setError('Elegí al menos un técnico'); return; }
     setBusy(true); setError('');
@@ -179,6 +181,7 @@ function AppointmentForm({
               selected={selected}
               onChange={setSelected}
               label="Técnicos asignados"
+              closeSignal={closeSignal}
             />
             <label className="flex" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} />

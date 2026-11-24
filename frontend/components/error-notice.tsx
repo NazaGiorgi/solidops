@@ -4,8 +4,10 @@ import { useEffect, useRef } from 'react';
 // Dismissible, self-clearing error banner.
 // - Has a close (×) button so it never floats indefinitely.
 // - Auto-hides its message after a few seconds.
-// - Clears the parent's error when this component unmounts (route change), so a
-//   stale red notice can never leak across screens.
+// - Callers render it only while their error is set, so unmounting already
+//   clears the parent state. Do not call onDismiss from a cleanup effect:
+//   StrictMode mounts/unmounts effects once in dev, which wiped the message
+//   immediately after it appeared.
 export function ErrorNotice({
   message,
   onDismiss,
@@ -29,15 +31,6 @@ export function ErrorNotice({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [message, autoHideMs]);
-
-  // On unmount (e.g. navigating away), clear the parent error so it never
-  // persists into the next screen.
-  useEffect(() => {
-    return () => {
-      onDismiss?.();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   if (!message) return null;
 

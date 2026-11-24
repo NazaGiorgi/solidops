@@ -579,6 +579,8 @@ function NewAppointment({
   });
   const [selectedTechIds, setSelectedTechIds] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [endError, setEndError] = useState('');
+  const [closeSignal, setCloseSignal] = useState(0);
 
   useEffect(() => {
     api.get<Array<{ id: string; user?: { name?: string } }>>('/technicians').then(setTechnicians).catch(() => {});
@@ -587,7 +589,17 @@ function NewAppointment({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Cerrar siempre el multi-select al enviar, incluso si la validación falla.
+    setCloseSignal((n) => n + 1);
     setError('');
+    setEndError('');
+    if (!form.startAt) { setError('Falta la hora de inicio'); return; }
+    if (!form.endAt) { setError('Falta la hora de fin'); return; }
+    if (new Date(form.endAt).getTime() <= new Date(form.startAt).getTime()) {
+      setEndError('La hora de fin debe ser posterior a la de inicio');
+      setError('Revisá la hora de fin');
+      return;
+    }
     try {
       await api.post('/appointments', {
         ...form,
@@ -605,6 +617,22 @@ function NewAppointment({
   }
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  function setStart(value: string) {
+    setForm((f) => ({ ...f, startAt: value, endAt: value ? addOneHourToLocalInput(value) : f.endAt }));
+    setEndError('');
+    setError('');
+  }
+
+  function setEnd(value: string) {
+    setForm((f) => ({ ...f, endAt: value }));
+    setEndError(
+      form.startAt && value && new Date(value).getTime() <= new Date(form.startAt).getTime()
+        ? 'La hora de fin debe ser posterior a la de inicio'
+        : '',
+    );
+    setError('');
+  }
 
   return (
     <div className="card mb-16">
@@ -630,6 +658,7 @@ function NewAppointment({
             selected={selectedTechIds}
             onChange={setSelectedTechIds}
             label="Técnicos"
+            closeSignal={closeSignal}
           />
         </div>
         <div className="field">
@@ -643,11 +672,23 @@ function NewAppointment({
         </div>
         <div className="field">
           <label>Inicio</label>
-          <input className="input" type="datetime-local" value={form.startAt} onChange={(e) => set('startAt', e.target.value)} required />
+          <input className="input" type="datetime-local" value={form.startAt} onChange={(e) => setStart(e.target.value)} />
         </div>
         <div className="field">
           <label>Fin</label>
-          <input className="input" type="datetime-local" value={form.endAt} onChange={(e) => set('endAt', e.target.value)} required />
+          <input
+            className="input"
+            type="datetime-local"
+            value={form.endAt}
+            onChange={(e) => setEnd(e.target.value)}
+            aria-invalid={!!endError}
+            style={endError ? { borderColor: '#dc2626' } : undefined}
+          />
+          {endError && (
+            <div className="notice notice-error" style={{ marginTop: 4, padding: '4px 8px', fontSize: 12 }}>
+              {endError}
+            </div>
+          )}
         </div>
         <div className="field">
           <label>Notas</label>
@@ -680,6 +721,16 @@ function NewAppointment({
 }
 
 // --- date helpers ------------------------------------------------------------
+// datetime-local guarda hora local sin zona; sumar sobre Date y reformatear
+// mantiene el valor editable y consistente con el input.
+function addOneHourToLocalInput(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  d.setHours(d.getHours() + 1);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function startOfWeek(d: Date): Date {
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day; // Monday start
