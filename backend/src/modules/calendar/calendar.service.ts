@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,6 +8,8 @@ import { Repository, Between } from 'typeorm';
 import { Appointment } from '../../entities/appointment.entity';
 import { AppointmentTechnician } from '../../entities/appointment-technician.entity';
 import { Task } from '../../entities/task.entity';
+import { Ticket } from '../../entities/ticket.entity';
+import { Customer } from '../../entities/customer.entity';
 import {
   CreateAppointmentDto,
   UpdateAppointmentDto,
@@ -37,6 +40,8 @@ export class CalendarService {
     private readonly appointmentTechs: Repository<AppointmentTechnician>,
     @InjectRepository(Task) private readonly tasks: Repository<Task>,
     @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Ticket) private readonly tickets: Repository<Ticket>,
+    @InjectRepository(Customer) private readonly customers: Repository<Customer>,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
   ) {}
@@ -248,25 +253,129 @@ export class CalendarService {
   }
 
   // --- Tasks ---------------------------------------------------------------
-  async getTasks(query: ListCalendarQuery, forAssigneeId?: string) {
+  private taskSnapshot(task: Task) {
+    return {
+      title: task.title,
+      assigneeId: task.assigneeId,
+      dueAt: task.dueAt ? new Date(task.dueAt) : null,
+      status: task.status,
+      priority: task.priority,
+      recurrenceRule: task.recurrenceRule,
+      notes: task.notes,
+      relatedEntityType: task.relatedEntityType,
+      relatedEntityId: task.relatedEntityId,
+    };
+  }
+
+  private parseStatusFilter(status?: string): TaskStatus[] | 'all' {
+    if (!status || status === 'all') return status === 'all' ? 'all' : [
+      TaskStatus.PENDIENTE,
+      TaskStatus.EN_PROGRESO,
+    ];
+    const values = status.split(',').map((s) => s.trim()).filter(Boolean);
+    const allowed = Object.values(TaskStatus) as string[];
+    const invalid = values.filter((v) => !allowed.includes(v));
+    if (invalid.length) {
+      throw new BadRequestException(`Estado de tarea inválido: ${invalid.join(', ')}`);
+    }
+    return values as TaskStatus[];
+  }
+
+  private async validateAssignee(assigneeId?: string | null): Promise<void> {
+    if (!assigneeId) return;
+    const user = await this.users.findOne({ where: { id: assigneeId, active: true } });
+    if (!user) throw new BadRequestException('El responsable debe ser un usuario interno activo');
+  }
+
+  private async validateRelatedEntity(
+    relatedEntityType?: string | null,
+    relatedEntityId?: string | null,
+  ): Promise<void> {
+    if (!relatedEntityType && !relatedEntityId) return;
+    if (!relatedEntityType || !relatedEntityId) {
+      throw new BadRequestException('La tarea vinculada necesita tipo e identificador');
+    }
+    if (!['ticket', 'customer'].includes(relatedEntityType)) {
+      throw new BadRequestException('Sólo se puede vincular a un ticket o a un cliente');
+    }
+    const exists = relatedEntityType === 'ticket'
+      ? await this.tickets.findOne({ where: { id: relatedEntityId } })
+      : await this.customers.findOne({ where: { id: relatedEntityId } });
+    if (!exists) throw new BadRequestException('El ticket o cliente vinculado no existe');
+  }
+
+  private async notifyAssignee(
+    task: Task,
+    actor: AuthenticatedUser,
+  ): Promise<void> {
+    if (!task.assigneeId || task.assigneeId === actor.id) return;
+    const due = task.dueAt
+      ? new Intl.DateTimeFormat('es-AR', {
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          timeZone: 'America/Argentina/Buenos_Aires',
+        }).format(new Date(task.dueAt))
+      : 'sin fecha';
+    await this.notifications.create({
+      userId: task.assigneeId,
+      type: NotificationType.TAREA_ASIGNADA,
+      payload: {
+        taskId: task.id,
+        title: task.title,
+        dueAt: task.dueAt?.toISOString() ?? null,
+        message: `Te asignaron la tarea: ${task.title} (vence ${due})`,
+      },
+    });
+  }
+
+  async getTasks(query: ListCalendarQuery, currentUserId?: string) {
     const qb = this.tasks
       .createQueryBuilder('task')
       .leftJoinAndSelect('task.assignee', 'assignee')
-      .where('task.status IN (:...active)', {
-        active: [TaskStatus.PENDIENTE, TaskStatus.EN_PROGRESO],
-      })
-      .orderBy('task.dueAt', 'ASC');
-    if (forAssigneeId) qb.andWhere('task.assignee_id = :a', { a: forAssigneeId });
+      .orderBy('task.dueAt', 'ASC', 'NULLS LAST');
+
+    // Sin filtros explícitos sobre la tarea, el listado es el de "mis tareas".
+    const hasExplicitTaskFilter =
+      query.assigneeId !== undefined ||
+      query.mine !== undefined ||
+      query.relatedEntityType !== undefined ||
+      query.relatedEntityId !== undefined;
+    const assigneeId = query.mine ? currentUserId : query.assigneeId;
+    if (assigneeId) qb.andWhere('task.assignee_id = :a', { a: assigneeId });
+    else if (!hasExplicitTaskFilter && currentUserId && query.overdue !== true) {
+      qb.andWhere('task.assignee_id = :a', { a: currentUserId });
+    }
+
+    const statuses = this.parseStatusFilter(query.status);
+    if (statuses !== 'all') {
+      qb.andWhere('task.status IN (:...statuses)', { statuses });
+    }
+    if (query.relatedEntityType) {
+      qb.andWhere('task.related_entity_type = :type', { type: query.relatedEntityType });
+    }
+    if (query.relatedEntityId) {
+      qb.andWhere('task.related_entity_id = :relatedId', { relatedId: query.relatedEntityId });
+    }
+    if (query.overdue) {
+      qb.andWhere('task.due_at IS NOT NULL').andWhere('task.due_at < :now', { now: new Date() });
+    }
     if (query.from && query.to) {
-      qb.andWhere('task.due_at BETWEEN :from AND :to', {
-        from: new Date(query.from),
-        to: new Date(query.to),
-      });
+      const range = 'task.due_at BETWEEN :from AND :to';
+      if (query.includeOverdue === false) {
+        qb.andWhere(range, { from: new Date(query.from), to: new Date(query.to) });
+      } else {
+        // Las vistas de pendientes incluyen vencidas y sin vencimiento.
+        qb.andWhere(
+          `(${range} OR task.due_at IS NULL OR task.due_at < :from)`,
+          { from: new Date(query.from), to: new Date(query.to) },
+        );
+      }
     }
     return qb.getMany();
   }
 
   async createTask(dto: CreateTaskDto, actor: AuthenticatedUser) {
+    await this.validateAssignee(dto.assigneeId);
+    await this.validateRelatedEntity(dto.relatedEntityType, dto.relatedEntityId);
     const task = this.tasks.create({
       title: dto.title,
       assigneeId: dto.assigneeId ?? null,
@@ -284,8 +393,9 @@ export class CalendarService {
       action: AuditAction.CREATE,
       entityType: AuditEntityType.TASK,
       entityId: saved.id,
-      newValue: { title: saved.title, status: saved.status },
+      newValue: this.taskSnapshot(saved),
     });
+    await this.notifyAssignee(saved, actor);
     return saved;
   }
 
@@ -293,16 +403,15 @@ export class CalendarService {
     const task = await this.tasks.findOne({ where: { id } });
     if (!task) throw new NotFoundException('Tarea no encontrada');
 
-    // Recurrence: when dueDat is advanced and rule is set, we generate the next
-    // occurrence rather than just moving the same row.
-    const shouldRecur =
-      dto.status === TaskStatus.HECHA &&
-      task.recurrenceRule !== RecurrenceRule.NONE;
-    if (shouldRecur) {
-      const next = await this.spawnNextOccurrence(task);
-      return next;
-    }
+    // Copiar ANTES de mutar: la auditoría necesita los valores reales previos.
+    const old = this.taskSnapshot(task);
+    const nextAssignee = dto.assigneeId !== undefined ? dto.assigneeId : task.assigneeId;
+    const nextType = dto.relatedEntityType !== undefined ? dto.relatedEntityType : task.relatedEntityType;
+    const nextRelatedId = dto.relatedEntityId !== undefined ? dto.relatedEntityId : task.relatedEntityId;
+    await this.validateAssignee(nextAssignee);
+    await this.validateRelatedEntity(nextType, nextRelatedId);
 
+    const recurrenceBase = task.dueAt ? new Date(task.dueAt) : new Date();
     if (dto.title !== undefined) task.title = dto.title;
     if (dto.assigneeId !== undefined) task.assigneeId = dto.assigneeId;
     if (dto.dueAt !== undefined) task.dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
@@ -310,28 +419,48 @@ export class CalendarService {
     if (dto.priority !== undefined) task.priority = dto.priority;
     if (dto.recurrenceRule !== undefined) task.recurrenceRule = dto.recurrenceRule;
     if (dto.notes !== undefined) task.notes = dto.notes;
-    const saved = await this.tasks.save(task);
+    if (dto.relatedEntityType !== undefined) task.relatedEntityType = dto.relatedEntityType;
+    if (dto.relatedEntityId !== undefined) task.relatedEntityId = dto.relatedEntityId;
 
+    const shouldRecur =
+      task.status === TaskStatus.HECHA &&
+      task.recurrenceRule !== RecurrenceRule.NONE;
+    if (shouldRecur) {
+      return this.spawnNextOccurrence(task, old, recurrenceBase, actor);
+    }
+
+    const saved = await this.tasks.save(task);
     await this.audit.log({
       user: actor,
       action: AuditAction.UPDATE,
       entityType: AuditEntityType.TASK,
       entityId: id,
-      oldValue: { status: task.status, priority: task.priority },
-      newValue: { status: saved.status, priority: saved.priority },
+      oldValue: old,
+      newValue: this.taskSnapshot(saved),
     });
+    if (nextAssignee && nextAssignee !== old.assigneeId) await this.notifyAssignee(saved, actor);
     return saved;
   }
 
-  private async spawnNextOccurrence(task: Task): Promise<Task> {
-    const nextDate = nextOccurrenceDate(
-      task.dueAt ?? new Date(),
-      task.recurrenceRule as RecurrenceRule,
-    );
-    // Mark current as done.
+  private async spawnNextOccurrence(
+    task: Task,
+    old: ReturnType<CalendarService['taskSnapshot']>,
+    recurrenceBase: Date,
+    actor: AuthenticatedUser,
+  ): Promise<{ done: Task; next: Task }> {
+    const nextDate = nextOccurrenceDate(recurrenceBase, task.recurrenceRule as RecurrenceRule);
     task.status = TaskStatus.HECHA;
-    await this.tasks.save(task);
-    // Create next occurrence (keeps same rule).
+    const done = await this.tasks.save(task);
+    await this.audit.log({
+      user: actor,
+      action: AuditAction.UPDATE,
+      entityType: AuditEntityType.TASK,
+      entityId: done.id,
+      oldValue: old,
+      newValue: this.taskSnapshot(done),
+    });
+
+    // La próxima conserva vínculo, responsable y el resto de cambios del PATCH.
     const next = this.tasks.create({
       title: task.title,
       assigneeId: task.assigneeId,
@@ -340,9 +469,20 @@ export class CalendarService {
       priority: task.priority,
       recurrenceRule: task.recurrenceRule,
       notes: task.notes,
+      relatedEntityType: task.relatedEntityType,
+      relatedEntityId: task.relatedEntityId,
       recurrenceParentId: task.id,
     });
-    return this.tasks.save(next);
+    const savedNext = await this.tasks.save(next);
+    await this.audit.log({
+      user: actor,
+      action: AuditAction.CREATE,
+      entityType: AuditEntityType.TASK,
+      entityId: savedNext.id,
+      newValue: this.taskSnapshot(savedNext),
+    });
+    await this.notifyAssignee(savedNext, actor);
+    return { done, next: savedNext };
   }
 
   async getTask(id: string): Promise<Task> {

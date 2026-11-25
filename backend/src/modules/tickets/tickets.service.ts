@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException,
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder, ObjectLiteral, In, DataSource, EntityManager } from 'typeorm';
 import { Ticket } from '../../entities/ticket.entity';
+import { Task } from '../../entities/task.entity';
 import { TicketMessage } from '../../entities/ticket-message.entity';
 import { Contact } from '../../entities/contact.entity';
 import { TicketAttachment } from '../../entities/ticket-attachment.entity';
@@ -32,6 +33,7 @@ import {
   NotificationType,
   TicketChannel,
   TicketAuthorType,
+  TaskStatus,
 } from '../../common/enums';
 import { SlaService } from './sla.service';
 import { StorageService } from '../../storage/storage.service';
@@ -72,6 +74,7 @@ export class TicketsService {
     @InjectRepository(WorkshopEquipment) private readonly workshopEq: Repository<WorkshopEquipment>,
     @InjectRepository(TicketGroup) private readonly groups: Repository<TicketGroup>,
     @InjectRepository(TicketTechnician) private readonly ticketTechs: Repository<TicketTechnician>,
+    @InjectRepository(Task) private readonly tasks: Repository<Task>,
     private readonly slaService: SlaService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
@@ -696,7 +699,24 @@ export class TicketsService {
     // Auto-respuestas al cliente por cambio de estado (si el toggle está activo).
     await this.maybeSendStatusEmail(t, old.status);
 
-    return this.findOne(id, actor);
+    const detail = await this.findOne(id, actor);
+    // Cerrar/resolver NO se bloquea por tareas pendientes: sólo se avisa.
+    if (t.status === TicketStatus.CERRADO || t.status === TicketStatus.RESUELTO) {
+      const pending = await this.tasks.count({
+        where: {
+          relatedEntityType: 'ticket',
+          relatedEntityId: id,
+          status: In([TaskStatus.PENDIENTE, TaskStatus.EN_PROGRESO]),
+        },
+      });
+      if (pending > 0) {
+        return {
+          ...detail,
+          warning: `Este ticket tiene ${pending} tarea${pending === 1 ? '' : 's'} pendiente${pending === 1 ? '' : 's'}`,
+        } as Ticket & { warning: string };
+      }
+    }
+    return detail;
   }
 
   // Envía al cliente la plantilla correspondiente cuando el estado del ticket

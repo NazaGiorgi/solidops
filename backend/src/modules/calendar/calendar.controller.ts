@@ -78,7 +78,8 @@ export class CalendarController {
   @Get('tasks')
   @Permissions(PERMISSIONS.CALENDAR_READ)
   getTasks(@Query() query: ListCalendarQuery, @CurrentUser() user: AuthenticatedUser) {
-    return this.service.getTasks(query, user.technicianId ?? undefined);
+    // task.assignee_id guarda un user id, no un technician id.
+    return this.service.getTasks(query, user.id);
   }
 
   @Get('tasks/:id')
