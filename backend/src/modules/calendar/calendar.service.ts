@@ -337,6 +337,7 @@ export class CalendarService {
     const hasExplicitTaskFilter =
       query.assigneeId !== undefined ||
       query.mine !== undefined ||
+      query.team === true ||
       query.relatedEntityType !== undefined ||
       query.relatedEntityId !== undefined;
     const assigneeId = query.mine ? currentUserId : query.assigneeId;

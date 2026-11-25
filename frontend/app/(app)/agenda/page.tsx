@@ -51,6 +51,7 @@ interface Task {
 }
 interface Technician {
   id: string;
+  userId?: string | null;
   user?: { name?: string };
 }
 
@@ -114,18 +115,36 @@ export default function AgendaPage() {
       .get<Appointment[]>(`/appointments?${qs.join('&')}`)
       .then(setAppointments)
       .catch(() => {});
-    api
-      .get<Task[]>(`/tasks?from=${from.toISOString()}&to=${to.toISOString()}&includeOverdue=true`)
+    // La tarjeta Tareas sigue el selector de técnico de arriba: sin filtro se
+    // ve todo el equipo (más las sin asignar); con técnico, sólo sus tareas.
+    const taskQs = [
+      `from=${from.toISOString()}`,
+      `to=${to.toISOString()}`,
+      'includeOverdue=true',
+    ];
+    const taskRequest: Promise<Task[]> = techFilter
+      ? (() => {
+          // assignee_id guarda un user id, no un technician id.
+          const userId = technicians.find((t) => t.id === techFilter)?.userId;
+          return userId
+            ? api.get<Task[]>(`/tasks?${taskQs.join('&')}&assigneeId=${userId}`)
+            : Promise.resolve([]);
+        })()
+      : api.get<Task[]>(`/tasks?${taskQs.join('&')}&team=true`);
+    taskRequest
       .then(setTasks)
-      .catch(() => {})
+      .catch(() => setTasks([]))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
     load();
-    api.get<Technician[]>('/technicians').then(setTechnicians).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, anchor, techFilter]);
+  }, [view, anchor, techFilter, technicians]);
+
+  useEffect(() => {
+    api.get<Technician[]>('/technicians').then(setTechnicians).catch(() => {});
+  }, []);
 
   useEffect(() => setMounted(true), []);
 
@@ -255,7 +274,7 @@ export default function AgendaPage() {
       {loading ? (
         <div className="empty">cargando…</div>
       ) : (
-        <div className="grid-3" style={{ gridTemplateColumns: '2fr 1fr' }}>
+        <div className="agenda-layout">
           <Card title={view === 'day' ? 'Día' : view === 'week' ? 'Semana' : 'Mes'}>
             {view === 'day' ? (
               <DayGrid
@@ -297,7 +316,10 @@ export default function AgendaPage() {
               />
             )}
           </Card>
-          <Card title="Tareas" meta={`${tasks.length} en el período`}>
+          <Card
+            title="Tareas"
+            meta={`${tasks.length} en el período · ${techFilter ? technicians.find((t) => t.id === techFilter)?.user?.name || 'técnico' : 'todo el equipo'}`}
+          >
             {tasks.length === 0 ? (
               <Empty message="Sin tareas en el período" />
             ) : (

@@ -238,6 +238,11 @@ export class ListCalendarQuery {
   @IsBoolean()
   mine?: boolean;
 
+  // Vista de equipo de la Agenda: todas las tareas pendientes + sin asignar.
+  @IsOptional()
+  @IsBoolean()
+  team?: boolean;
+
   // 'pendiente,en_progreso' (por defecto), un estado concreto o 'all'.
   @IsOptional()
   @IsString()

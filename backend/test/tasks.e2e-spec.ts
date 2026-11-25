@@ -378,4 +378,70 @@ describe('Tareas pendientes - correcciones e2e', () => {
     expect(note.payload.whatsapp).toBeUndefined();
     evidence('prueba-10', { taskId: task.id, type: note.type, payload: note.payload });
   });
+
+  const agendaRange =
+    'from=2020-01-01T00:00:00Z&to=2035-01-01T00:00:00Z&includeOverdue=true';
+
+  it('11 - supervisor con "todos los técnicos": todo el equipo y las sin asignar', async () => {
+    const dueAt = new Date(Date.now() + 86400000).toISOString();
+    const own = await createTask({
+      title: `__e2e agenda equipo ana ${suffix}`, assigneeId: anaUserId, dueAt,
+    });
+    const mariaTask = await createTask({
+      title: `__e2e agenda equipo maria ${suffix}`, assigneeId: mariaUserId, dueAt,
+    });
+    const unassigned = await createTask({
+      title: `__e2e agenda sin asignar ${suffix}`, dueAt,
+    });
+    const res = await request(app.getHttpServer())
+      .get(`/api/tasks?${agendaRange}&team=true`)
+      .set(auth(adminToken))
+      .expect(200);
+    const byId = new Map((res.body as any[]).map((t) => [t.id, t] as const));
+    expect(byId.has(own.id)).toBe(true);
+    expect(byId.has(mariaTask.id)).toBe(true);
+    expect(byId.has(unassigned.id)).toBe(true);
+    expect(byId.get(mariaTask.id)?.assignee?.id).toBe(mariaUserId);
+    expect(typeof byId.get(mariaTask.id)?.assignee?.name).toBe('string');
+    expect(byId.get(unassigned.id)?.assignee).toBeNull();
+    evidence('prueba-11', {
+      team: [own.id, mariaTask.id, unassigned.id],
+      assigneeName: byId.get(mariaTask.id)?.assignee?.name,
+    });
+  });
+
+  it('12 - con un técnico elegido se filtra por el userId de ese técnico', async () => {
+    const techs = await request(app.getHttpServer())
+      .get('/api/technicians')
+      .set(auth(adminToken))
+      .expect(200);
+    const mariaTech = (techs.body as any[]).find((t) => t.userId === mariaUserId);
+    expect(mariaTech).toBeDefined();
+    const dueAt = new Date(Date.now() + 86400000).toISOString();
+    const theirs = await createTask({
+      title: `__e2e agenda tecnico maria ${suffix}`, assigneeId: mariaTech.userId, dueAt,
+    });
+    const other = await createTask({
+      title: `__e2e agenda tecnico ana ${suffix}`, assigneeId: anaUserId, dueAt,
+    });
+    const res = await request(app.getHttpServer())
+      .get(`/api/tasks?${agendaRange}&assigneeId=${mariaTech.userId}`)
+      .set(auth(adminToken))
+      .expect(200);
+    const ids = (res.body as any[]).map((t) => t.id);
+    expect(ids).toContain(theirs.id);
+    expect(ids).not.toContain(other.id);
+    evidence('prueba-12', { technicianId: mariaTech.id, userId: mariaTech.userId, ids });
+  });
+
+  it('13 - Mi día sigue mostrando sólo las tareas propias y las sin asignar', async () => {
+    const mine = await createTask({ title: `__e2e midia propio ${suffix}`, assigneeId: anaUserId });
+    const theirs = await createTask({ title: `__e2e midia ajeno ${suffix}`, assigneeId: mariaUserId });
+    const unassigned = await createTask({ title: `__e2e midia sin asignar ${suffix}` });
+    const ids = (await myDay(adminToken)).map((t) => t.id);
+    expect(ids).toContain(mine.id);
+    expect(ids).toContain(unassigned.id);
+    expect(ids).not.toContain(theirs.id);
+    evidence('prueba-13', { mine: mine.id, unassigned: unassigned.id, excluded: theirs.id });
+  });
 });

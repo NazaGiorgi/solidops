@@ -4,15 +4,30 @@
    globals.css can never wipe the agenda styling again.
    ===================================================================== */
 
+/* Agenda body: grilla a la izquierda, tarjeta de Tareas a la derecha.
+   `minmax(0, ...)` evita que el ancho mínimo de la semana empuje la tarjeta
+   fuera del viewport; en pantallas angostas se apila en una sola columna. */
+.agenda-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.agenda-layout > .card { min-width: 0; }
+@media (max-width: 1200px) {
+  .agenda-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* --- Week: 7 equal day columns --- */
 .week-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  grid-template-columns: repeat(7, minmax(96px, 1fr));
   gap: 6px;
   min-height: 240px;
+  overflow-x: auto;
 }
-@media (max-width: 800px) {
-  .week-grid { grid-template-columns: repeat(7, minmax(72px, 1fr)); overflow-x: auto; }
+@media (max-width: 1200px) {
+  .week-grid { grid-template-columns: repeat(7, minmax(72px, 1fr)); }
 }
 .week-day {
   border: 1px solid var(--border);
