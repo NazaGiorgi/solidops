@@ -4,6 +4,8 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { assertIsolatedTestDb } from './test-db.guard';
 
+jest.setTimeout(60000);
+
 // Smoke test for the core auth + RBAC flow.
 // Requires a running Postgres/Redis/MinIO (or the full stack via docker-compose).
 // Run with: npm run test:e2e
