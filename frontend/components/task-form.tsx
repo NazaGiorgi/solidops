@@ -11,6 +11,16 @@ export interface TaskFormDefaults {
   relatedEntityId?: string | null;
 }
 
+// Lo que recibe quien abrió el modal: con el responsable resuelto a nombre para
+// poder avisar al usuario si la tarea nueva no va a aparecer en su lista.
+export interface SavedTaskInfo {
+  id: string;
+  title: string;
+  dueAt?: string | null;
+  assigneeId?: string | null;
+  assigneeName?: string | null;
+}
+
 interface Assignee {
   id: string;
   name: string;
@@ -24,7 +34,7 @@ export function TaskForm({
 }: {
   defaults?: TaskFormDefaults;
   onClose: () => void;
-  onSaved: (task?: { id: string; title: string; dueAt?: string | null }) => void;
+  onSaved: (task?: SavedTaskInfo) => void;
 }) {
   const { user } = useAuth();
   const [title, setTitle] = useState('');
@@ -39,6 +49,9 @@ export function TaskForm({
   );
   const [relatedId, setRelatedId] = useState(defaults.relatedEntityId ?? '');
   const [assignees, setAssignees] = useState<Assignee[]>([]);
+  // El responsable por defecto (ticket/cliente) llega antes que el catálogo:
+  // no rechazarlo sólo porque las opciones todavía no cargaron.
+  const [assigneesLoaded, setAssigneesLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -54,9 +67,11 @@ export function TaskForm({
           options.unshift({ id: user.id, name: user.name });
         }
         setAssignees(options);
+        setAssigneesLoaded(true);
       })
       .catch(() => {
         setAssignees(user ? [{ id: user.id, name: user.name }] : []);
+        setAssigneesLoaded(true);
       });
   }, [user]);
 
@@ -68,7 +83,7 @@ export function TaskForm({
       return 'La tarea sólo puede vincularse a un ticket o a un cliente';
     }
     if (relatedType && !relatedId) return 'Falta el ticket o cliente vinculado';
-    if (assigneeId && !assignees.some((a) => a.id === assigneeId)) {
+    if (assigneesLoaded && assigneeId && !assignees.some((a) => a.id === assigneeId)) {
       return 'El responsable debe ser un usuario interno activo';
     }
     return '';
@@ -80,7 +95,7 @@ export function TaskForm({
     if (problem) { setError(problem); return; }
     setBusy(true); setError('');
     try {
-      const created = await api.post<{ id: string; title: string; dueAt?: string | null }>('/tasks', {
+      const created = await api.post<SavedTaskInfo>('/tasks', {
         title: title.trim(),
         assigneeId: assigneeId || null,
         dueAt: dueDate ? new Date(`${dueDate}T${dueTime || '09:00'}`).toISOString() : null,
@@ -90,7 +105,26 @@ export function TaskForm({
         relatedEntityType: relatedType || null,
         relatedEntityId: relatedType ? relatedId : null,
       });
-      onSaved(created);
+      const savedAssigneeId = created.assigneeId ?? assigneeId ?? null;
+      // El catálogo puede seguir cargando cuando se guarda: resolver el nombre
+      // también desde el usuario actual o desde /technicians si hace falta.
+      let assigneeName = savedAssigneeId
+        ? assignees.find((a) => a.id === savedAssigneeId)?.name || null
+        : null;
+      if (savedAssigneeId && !assigneeName && user?.id === savedAssigneeId) {
+        assigneeName = user.name;
+      }
+      if (savedAssigneeId && !assigneeName) {
+        try {
+          const techs = await api.get<Array<{ userId?: string | null; user?: { name?: string } }>>(
+            '/technicians',
+          );
+          assigneeName = techs.find((t) => t.userId === savedAssigneeId)?.user?.name || null;
+        } catch {
+          /* el aviso usa un nombre genérico si no se puede resolver */
+        }
+      }
+      onSaved({ ...created, assigneeId: savedAssigneeId, assigneeName });
     } catch (err) {
       setError((err as Error).message);
     } finally { setBusy(false); }

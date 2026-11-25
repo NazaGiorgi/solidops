@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Card, Empty, Pill } from './ui';
@@ -41,8 +41,18 @@ export function TasksSection({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState<ModalItem | null>(null);
+  const [notice, setNotice] = useState('');
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const relatedType = ticketId ? 'ticket' : 'customer';
   const relatedId = ticketId || customerId || '';
+
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
+
+  function flash(message: string) {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(message);
+    noticeTimer.current = setTimeout(() => setNotice(''), 3000);
+  }
 
   function load() {
     api
@@ -65,6 +75,7 @@ export function TasksSection({
 
   return (
     <Card title="Tareas" meta={`${tasks.length}`}>
+      {notice && <div className="notice mb-8">{notice}</div>}
       <div className="flex-between mb-16" style={{ gap: 8 }}>
         <span className="muted" style={{ fontSize: 13 }}>Pendientes primero</span>
         {hasPerm('calendar:write') && (
@@ -114,14 +125,22 @@ export function TasksSection({
             relatedEntityId: relatedId,
           }}
           onClose={() => setCreating(false)}
-          onSaved={() => { setCreating(false); load(); }}
+          onSaved={(task) => {
+            setCreating(false);
+            load();
+            flash(
+              task?.assigneeId
+                ? `Tarea creada y asignada a ${task.assigneeName || 'otra persona'}`
+                : 'Tarea creada',
+            );
+          }}
         />
       )}
       {open && (
         <ActivityDetailModal
           item={open}
           onClose={() => setOpen(null)}
-          onSaved={() => { setOpen(null); load(); }}
+          onSaved={() => { setOpen(null); flash('Tarea actualizada'); load(); }}
         />
       )}
     </Card>

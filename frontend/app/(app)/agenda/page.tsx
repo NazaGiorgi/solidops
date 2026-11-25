@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { Shell } from '../shell';
@@ -83,6 +83,15 @@ export default function AgendaPage() {
   // `new Date()` difiere entre SSR y el navegador: no renderizar la etiqueta
   // de la semana hasta después del mount evita el hydration mismatch.
   const [mounted, setMounted] = useState(false);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
+
+  function flashNotice(message: string) {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(message);
+    noticeTimer.current = setTimeout(() => setNotice(''), 2500);
+  }
 
   // --- data loading ---------------------------------------------------------
   function rangeFor(mode: ViewMode, a: Date): { from: Date; to: Date; label: string } {
@@ -264,7 +273,15 @@ export default function AgendaPage() {
         <TaskForm
           defaults={{ assigneeId: user?.id ?? null }}
           onClose={() => setShowTask(false)}
-          onSaved={() => { setShowTask(false); load(); }}
+          onSaved={(task) => {
+            setShowTask(false);
+            load();
+            flashNotice(
+              task?.assigneeId && task.assigneeId !== user?.id
+                ? `Tarea creada y asignada a ${task.assigneeName || 'otra persona'}`
+                : 'Tarea creada',
+            );
+          }}
         />
       )}
       {openItem && (

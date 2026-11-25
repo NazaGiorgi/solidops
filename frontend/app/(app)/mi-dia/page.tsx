@@ -64,10 +64,21 @@ export default function MyDayPage() {
   const [undo, setUndo] = useState<{ id: string; previous: string } | null>(null);
   const [nextLabel, setNextLabel] = useState('');
   const [showTask, setShowTask] = useState(false);
+  const [notice, setNotice] = useState('');
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { setNow(new Date()); }, []);
-  useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
+  useEffect(() => () => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+  }, []);
+
+  function flash(message: string) {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(message);
+    noticeTimer.current = setTimeout(() => setNotice(''), 5000);
+  }
 
   async function complete(task: Task) {
     if (undoTimer.current) clearTimeout(undoTimer.current);
@@ -106,7 +117,7 @@ export default function MyDayPage() {
     ? [...tasks].sort((a, b) => compareTasksForMyDay(a, b, now))
     : tasks;
 
-  useEffect(() => {
+  function load() {
     api
       .get<{ appointments: Appointment[]; myTickets: Ticket[]; tasks: Task[] }>(
         '/dashboard/my-day',
@@ -118,7 +129,9 @@ export default function MyDayPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
 
   return (
     <Shell>
@@ -202,6 +215,7 @@ export default function MyDayPage() {
                   <button className="btn btn-sm" onClick={() => setShowTask(true)}>+ nueva tarea</button>
                 )}
               </div>
+              {notice && <div className="notice mb-8">{notice}</div>}
               {nextLabel && <div className="notice mb-8">{nextLabel}</div>}
               {undo && (
                 <div className="notice flex-between mb-8">
@@ -256,7 +270,18 @@ export default function MyDayPage() {
                 <TaskForm
                   defaults={{ assigneeId: user?.id ?? null }}
                   onClose={() => setShowTask(false)}
-                  onSaved={() => setShowTask(false)}
+                  onSaved={(task) => {
+                    setShowTask(false);
+                    // Recargar: el dashboard ya ordena vencidas → hoy → próximas → sin fecha.
+                    load();
+                    if (task?.assigneeId && task.assigneeId !== user?.id) {
+                      flash(
+                        `Tarea creada y asignada a ${task.assigneeName || 'otra persona'}; no aparece acá porque no es tuya`,
+                      );
+                    } else {
+                      flash('Tarea creada');
+                    }
+                  }}
                 />
               )}
             </Card>
