@@ -8,6 +8,7 @@ import { PageHeader, Card, Empty, Pill } from '../../../../components/ui';
 import { TicketCard, TicketCardData } from '../../../../components/ticket-card';
 import { DocumentList } from '../../../../components/document-list';
 import { NotesSection } from '../../../../components/notes-section';
+import { TasksSection } from '../../../../components/tasks-section';
 import { ErrorNotice } from '../../../../components/error-notice';
 
 interface Contact {
@@ -197,6 +198,7 @@ export default function CustomerDetail({ params }: { params: { id: string } }) {
       </Card>
 
       <NotesSection customerId={c.id} />
+      <TasksSection customerId={c.id} />
 
       <div className="grid-auto">
         <Card title="Sitios" meta={`${c.sites.length}`}>

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '../lib/api';
 import { ErrorNotice } from './error-notice';
@@ -9,8 +10,10 @@ import {
   APPOINTMENT_TYPE_PILLS,
   APPOINTMENT_STATUS_LABELS,
   APPOINTMENT_STATUS_PILLS,
+  RECURRENCE_LABELS,
   TASK_STATUS_LABELS,
   TASK_STATUS_PILLS,
+  formatDay,
 } from '../lib/helpers';
 
 export interface ModalItem {
@@ -61,7 +64,12 @@ export function ActivityDetailModal({
     dueAt: '',
     notes: '',
     assigneeId: '',
+    recurrenceRule: 'none',
   });
+  const [taskMeta, setTaskMeta] = useState<{
+    relatedEntityType?: 'ticket' | 'customer' | null;
+    relatedEntityId?: string | null;
+  }>({});
 
   useEffect(() => {
     api
@@ -107,6 +115,9 @@ export function ActivityDetailModal({
         const t = await api.get<{
           id: string; title: string; status: string; priority: string;
           dueAt: string | null; notes: string | null; assigneeId: string | null;
+          recurrenceRule?: string | null;
+          relatedEntityType?: 'ticket' | 'customer' | null;
+          relatedEntityId?: string | null;
         }>(`/tasks/${item.id}`);
         setTaskForm({
           title: t.title || '',
@@ -115,6 +126,11 @@ export function ActivityDetailModal({
           dueAt: t.dueAt ? toLocalInput(t.dueAt) : '',
           notes: t.notes || '',
           assigneeId: t.assigneeId || '',
+          recurrenceRule: t.recurrenceRule || 'none',
+        });
+        setTaskMeta({
+          relatedEntityType: t.relatedEntityType,
+          relatedEntityId: t.relatedEntityId,
         });
       }
     } catch (err) {
@@ -143,16 +159,20 @@ export function ActivityDetailModal({
           isPrivate: !!form.isPrivate,
         });
       } else {
-        await api.patch(`/tasks/${item.id}`, {
+        const res = await api.patch<{ next?: { dueAt?: string | null } }>(`/tasks/${item.id}`, {
           title: taskForm.title,
           status: taskForm.status,
           priority: taskForm.priority,
           dueAt: taskForm.dueAt ? new Date(taskForm.dueAt).toISOString() : null,
           notes: taskForm.notes || null,
           assigneeId: taskForm.assigneeId || null,
+          recurrenceRule: taskForm.recurrenceRule,
         });
+        setNotice(res?.next?.dueAt
+          ? `Guardado · Próxima: ${formatDay(res.next.dueAt)}`
+          : 'Guardado');
       }
-      setNotice('Guardado');
+      if (item.kind === 'appointment') setNotice('Guardado');
       setTimeout(() => {
         setNotice('');
         onSaved();
@@ -349,6 +369,14 @@ export function ActivityDetailModal({
                   <option value="critica">crítica</option>
                 </select>
               </div>
+              <div className="field">
+                <label>Se repite</label>
+                <select className="select" value={taskForm.recurrenceRule} onChange={(e) => setTaskForm({ ...taskForm, recurrenceRule: e.target.value })}>
+                  {Object.entries(RECURRENCE_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="grid-3">
               <div className="field">
@@ -369,6 +397,14 @@ export function ActivityDetailModal({
               <label>Notas</label>
               <textarea className="textarea" value={taskForm.notes} onChange={(e) => setTaskForm({ ...taskForm, notes: e.target.value })} />
             </div>
+            {taskMeta.relatedEntityType && taskMeta.relatedEntityId && (
+              <div className="mb-8">
+                Vinculada a {taskMeta.relatedEntityType}:{' '}
+                <Link className="link" href={`/${taskMeta.relatedEntityType === 'ticket' ? 'tickets' : 'clientes'}/${taskMeta.relatedEntityId}`}>
+                  ver {taskMeta.relatedEntityType}
+                </Link>
+              </div>
+            )}
           </div>
         )}
         <div className="modal-foot flex flex-between">

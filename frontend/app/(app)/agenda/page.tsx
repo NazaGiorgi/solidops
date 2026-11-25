@@ -7,13 +7,20 @@ import { PageHeader, Card, Empty, Pill } from '../../../components/ui';
 import { ErrorNotice } from '../../../components/error-notice';
 import { ActivityDetailModal, ModalItem } from '../../../components/activity-detail';
 import { TechnicianMultiSelect } from '../../../components/technician-multi-select';
+import { TaskForm } from '../../../components/task-form';
+import { useAuth } from '../../../lib/auth';
 import {
   APPOINTMENT_TYPE_LABELS,
   APPOINTMENT_TYPE_PILLS,
+  RECURRENCE_LABELS,
+  PRIORITY_LABELS,
+  PRIORITY_PILLS,
   TASK_STATUS_PILLS,
   TASK_STATUS_LABELS,
   formatTime,
   formatDay,
+  taskDueLabel,
+  taskDuePill,
 } from '../../../lib/helpers';
 
 interface Appointment {
@@ -35,7 +42,11 @@ interface Task {
   id: string;
   title: string;
   status: string;
+  priority?: string;
   dueAt: string | null;
+  recurrenceRule?: string | null;
+  relatedEntityType?: 'ticket' | 'customer' | null;
+  relatedEntityId?: string | null;
   assignee?: { name?: string } | null;
 }
 interface Technician {
@@ -54,11 +65,13 @@ function appointmentTechNames(a: Appointment): string {
 }
 
 export default function AgendaPage() {
+  const { user, hasPerm } = useAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [showTask, setShowTask] = useState(false);
   const [openItem, setOpenItem] = useState<ModalItem | null>(null);
   const [view, setView] = useState<ViewMode>('week');
   const [anchor, setAnchor] = useState<Date>(new Date());
@@ -102,7 +115,7 @@ export default function AgendaPage() {
       .then(setAppointments)
       .catch(() => {});
     api
-      .get<Task[]>(`/tasks?from=${from.toISOString()}&to=${to.toISOString()}`)
+      .get<Task[]>(`/tasks?from=${from.toISOString()}&to=${to.toISOString()}&includeOverdue=true`)
       .then(setTasks)
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -210,6 +223,9 @@ export default function AgendaPage() {
         ))}
       </select>
       <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ nuevo turno</button>
+      {hasPerm('calendar:write') && (
+        <button className="btn" onClick={() => setShowTask(true)}>+ nueva tarea</button>
+      )}
     </div>
   );
 
@@ -218,7 +234,20 @@ export default function AgendaPage() {
       <PageHeader title="Agenda" subtitle="Turnos por semana o mes" action={action} />
       {notice && <div className="notice">{notice}</div>}
       {error && <ErrorNotice message={error} onDismiss={() => setError('')} />}
-      {showNew && <NewAppointment onClose={() => setShowNew(false)} onCreate={() => load()} />}
+      {showNew && (
+        <NewAppointment
+          onClose={() => setShowNew(false)}
+          onCreate={() => load()}
+          onNewTask={() => { setShowNew(false); setShowTask(true); }}
+        />
+      )}
+      {showTask && (
+        <TaskForm
+          defaults={{ assigneeId: user?.id ?? null }}
+          onClose={() => setShowTask(false)}
+          onSaved={() => { setShowTask(false); load(); }}
+        />
+      )}
       {openItem && (
         <ActivityDetailModal item={openItem} onClose={() => setOpenItem(null)} onSaved={() => load()} />
       )}
@@ -280,12 +309,35 @@ export default function AgendaPage() {
                     className="task-row"
                     onClick={() => setOpenItem({ kind: 'task', id: t.id })}
                   >
-                    <div style={{ fontWeight: 500 }}>{t.title}</div>
+                    <div className="flex-between" style={{ gap: 8 }}>
+                      <span style={{ fontWeight: 500 }}>{t.title}</span>
+                      {t.recurrenceRule && t.recurrenceRule !== 'none' && (
+                        <span title={RECURRENCE_LABELS[t.recurrenceRule]}>↻</span>
+                      )}
+                    </div>
                     <div className="flex wrap" style={{ marginTop: 4 }}>
                       <Pill style={TASK_STATUS_PILLS[t.status] || 'pill-gray'}>
                         {TASK_STATUS_LABELS[t.status] || t.status}
                       </Pill>
-                      <span className="card-meta">{t.dueAt ? formatTime(t.dueAt) : '—'}</span>
+                      {t.priority && (
+                        <Pill style={PRIORITY_PILLS[t.priority] || 'pill-gray'}>
+                          {PRIORITY_LABELS[t.priority] || t.priority}
+                        </Pill>
+                      )}
+                      <Pill style={taskDuePill(t.dueAt)}>{taskDueLabel(t.dueAt)}</Pill>
+                      <span className="card-meta">
+                        {t.assignee?.name ? `👤 ${t.assignee.name}` : 'sin responsable'}
+                      </span>
+                      {t.dueAt && <span className="card-meta">{formatTime(t.dueAt)}</span>}
+                      {t.relatedEntityType && t.relatedEntityId && (
+                        <Link
+                          className="link"
+                          href={`/${t.relatedEntityType === 'ticket' ? 'tickets' : 'clientes'}/${t.relatedEntityId}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          ver {t.relatedEntityType}
+                        </Link>
+                      )}
                     </div>
                   </button>
                 ))}
@@ -561,9 +613,11 @@ function MonthGrid({
 function NewAppointment({
   onClose,
   onCreate,
+  onNewTask,
 }: {
   onClose: () => void;
   onCreate: () => void;
+  onNewTask: () => void;
 }) {
   const [technicians, setTechnicians] = useState<Array<{ id: string; user?: { name?: string } }>>([]);
   const [customers, setCustomers] = useState<Array<{ id: string; name: string }>>([]);
@@ -645,8 +699,10 @@ function NewAppointment({
             <option value="reunion">reunión</option>
             <option value="visita">visita</option>
             <option value="guardia">guardia</option>
-            <option value="tarea">tarea</option>
           </select>
+          <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+            ¿Es algo sin hora fija? <button type="button" className="link" onClick={onNewTask}>Creá una tarea</button>
+          </div>
         </div>
         <div className="field">
           <label>Asunto</label>

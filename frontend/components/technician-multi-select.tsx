@@ -4,6 +4,7 @@ import { Pill } from './ui';
 
 export interface TechnicianOption {
   id: string;
+  userId?: string | null;
   name?: string;
   user?: { name?: string };
 }

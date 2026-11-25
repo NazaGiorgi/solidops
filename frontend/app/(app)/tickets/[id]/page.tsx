@@ -8,6 +8,7 @@ import { Shell } from '../../shell';
 import { PageHeader, Card, Empty, Pill } from '../../../../components/ui';
 import { NotesSection } from '../../../../components/notes-section';
 import { TicketAppointments } from '../../../../components/ticket-appointments';
+import { TasksSection } from '../../../../components/tasks-section';
 import { TechnicianMultiSelect, type TechnicianOption } from '../../../../components/technician-multi-select';
 import { ErrorNotice } from '../../../../components/error-notice';
 import {
@@ -298,6 +299,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   async function save() {
     setBusy(true);
     setError('');
+    let warning = '';
     try {
       // P3: when closing the principal, ask which children to close together.
       if (
@@ -306,20 +308,22 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
         (ticket?.mergedChildren?.length ?? 0) > 0
       ) {
         const chosen = closeChildrenIds;
-        await api.post(`/tickets/${params.id}/merge/close`, {
+        const res = await api.post<{ warning?: string }>(`/tickets/${params.id}/merge/close`, {
           closeChildrenIds: chosen,
         });
+        warning = res?.warning || '';
       } else {
         // Sin tickets:assign se pueden ver los colaboradores, pero no se
         // envían cambios (el backend igual devolvería 403).
         const payload = { ...data };
         if (!canAssign) delete payload.collaboratorIds;
-        await api.patch(`/tickets/${params.id}`, payload);
+        const res = await api.patch<{ warning?: string }>(`/tickets/${params.id}`, payload);
+        warning = res?.warning || '';
         // If it WAS principal+children and now closing, fine; otherwise normal.
       }
       await load();
-      setMsg('Guardado');
-      setTimeout(() => setMsg(''), 2500);
+      setMsg(warning || 'Guardado');
+      setTimeout(() => setMsg(''), warning ? 6000 : 2500);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -976,6 +980,12 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           ...(data.technicianId ? [data.technicianId] : []),
           ...(data.collaboratorIds ?? []),
         ]}
+      />
+      <TasksSection
+        ticketId={ticket.id}
+        defaultAssigneeId={
+          technicians.find((t) => t.id === data.technicianId)?.userId ?? user?.id ?? null
+        }
       />
       <NotesSection ticketId={ticket.id} />
 
