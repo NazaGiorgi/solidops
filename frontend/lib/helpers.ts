@@ -159,6 +159,69 @@ export const TASK_STATUS_LABELS: Record<string, string> = {
   pospuesta: 'pospuesta',
 };
 
+export const RECURRENCE_LABELS: Record<string, string> = {
+  none: 'no se repite',
+  daily: 'diaria',
+  weekly: 'semanal',
+  monthly: 'mensual',
+};
+
+// Días en America/Argentina/Buenos_Aires, sin depender del timezone del browser.
+function dateKey(value: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(value);
+}
+
+export type TaskDueState = 'overdue' | 'today' | 'upcoming' | 'none';
+
+export function taskDueState(dueAt?: string | null, now: Date = new Date()): TaskDueState {
+  if (!dueAt) return 'none';
+  const due = new Date(dueAt);
+  if (isNaN(due.getTime())) return 'none';
+  const dueKey = dateKey(due);
+  const todayKey = dateKey(now);
+  if (dueKey < todayKey) return 'overdue';
+  if (dueKey === todayKey) return 'today';
+  return 'upcoming';
+}
+
+export function taskDueLabel(dueAt?: string | null, now: Date = new Date()): string {
+  switch (taskDueState(dueAt, now)) {
+    case 'overdue': return 'Vencida';
+    case 'today': return 'Vence hoy';
+    case 'upcoming': return formatDay(dueAt);
+    default: return 'Sin fecha';
+  }
+}
+
+export function taskDuePill(dueAt?: string | null, now: Date = new Date()): string {
+  switch (taskDueState(dueAt, now)) {
+    case 'overdue': return 'pill-red';
+    case 'today': return 'pill-amber';
+    case 'upcoming': return 'pill-blue';
+    default: return 'pill-gray';
+  }
+}
+
+// Vencidas → hoy → próximas (por fecha) → sin fecha.
+export function compareTasksForMyDay<T extends { dueAt?: string | null }>(
+  a: T,
+  b: T,
+  now: Date = new Date(),
+): number {
+  const order: Record<TaskDueState, number> = { overdue: 0, today: 1, upcoming: 2, none: 3 };
+  const diff = order[taskDueState(a.dueAt, now)] - order[taskDueState(b.dueAt, now)];
+  if (diff) return diff;
+  if (!a.dueAt && !b.dueAt) return 0;
+  if (!a.dueAt) return 1;
+  if (!b.dueAt) return -1;
+  return new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime();
+}
+
 export const CHANNEL_LABELS: Record<string, string> = {
   email: 'email',
   portal: 'portal',

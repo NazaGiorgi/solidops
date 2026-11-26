@@ -3,10 +3,13 @@ import {
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
 } from 'class-validator';
 import {
   AppointmentType,
@@ -133,6 +136,8 @@ export class MoveAppointmentDto {
 
 export class CreateTaskDto {
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
   title: string;
 
   @IsOptional()
@@ -160,8 +165,8 @@ export class CreateTaskDto {
   notes?: string;
 
   @IsOptional()
-  @IsString()
-  relatedEntityType?: string;
+  @IsIn(['ticket', 'customer'])
+  relatedEntityType?: 'ticket' | 'customer';
 
   @IsOptional()
   @IsUUID()
@@ -171,6 +176,8 @@ export class CreateTaskDto {
 export class UpdateTaskDto {
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
   title?: string;
 
   @IsOptional()
@@ -196,6 +203,14 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsIn(['ticket', 'customer'])
+  relatedEntityType?: 'ticket' | 'customer';
+
+  @IsOptional()
+  @IsUUID()
+  relatedEntityId?: string;
 }
 
 export class ListCalendarQuery {
@@ -214,4 +229,39 @@ export class ListCalendarQuery {
   @IsOptional()
   @IsUUID()
   ticketId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  assigneeId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  mine?: boolean;
+
+  // Vista de equipo de la Agenda: todas las tareas pendientes + sin asignar.
+  @IsOptional()
+  @IsBoolean()
+  team?: boolean;
+
+  // 'pendiente,en_progreso' (por defecto), un estado concreto o 'all'.
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @IsOptional()
+  @IsIn(['ticket', 'customer'])
+  relatedEntityType?: 'ticket' | 'customer';
+
+  @IsOptional()
+  @IsUUID()
+  relatedEntityId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  overdue?: boolean;
+
+  // Las vistas de pendientes incluyen vencidas y sin vencimiento por defecto.
+  @IsOptional()
+  @IsBoolean()
+  includeOverdue?: boolean;
 }

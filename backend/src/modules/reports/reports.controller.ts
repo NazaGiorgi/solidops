@@ -32,9 +32,11 @@ export class ReportsController {
 
     // Lazy migration hints from Zammad keep their original createdAt; import has
     // preserved those, so filtering by createdAt is correct for history too.
+    let fromDate: Date | null = null;
+    let toDate: Date | null = null;
     if (from || to) {
-      const fromDate = from && !Number.isNaN(Date.parse(from)) ? new Date(from) : null;
-      const toDate = to && !Number.isNaN(Date.parse(to)) ? new Date(to) : null;
+      fromDate = from && !Number.isNaN(Date.parse(from)) ? new Date(from) : null;
+      toDate = to && !Number.isNaN(Date.parse(to)) ? new Date(to) : null;
       if (from && !fromDate) throw new BadRequestException('from inválido');
       if (to && !toDate) throw new BadRequestException('to inválido');
       if (fromDate) qb.andWhere('t.createdAt >= :from', { from: fromDate });
@@ -47,6 +49,29 @@ export class ReportsController {
     }
 
     const tickets = await qb.getMany();
+
+    // Colaboraciones: conteo aparte, con el MISMO rango de fechas. No se suma
+    // a byTechnician (ese sigue midiendo sólo al responsable).
+    const collabParams: unknown[] = [];
+    let collabRangeSql = '';
+    if (fromDate) {
+      collabParams.push(fromDate);
+      collabRangeSql += ` AND t.created_at >= $${collabParams.length}`;
+    }
+    if (toDate) {
+      const end = new Date(toDate);
+      end.setHours(23, 59, 59, 999);
+      collabParams.push(end);
+      collabRangeSql += ` AND t.created_at <= $${collabParams.length}`;
+    }
+    const collabRows = await this.tickets.query<Array<{ technicianId: string; count: number }>>(
+      `SELECT tt.technician_id AS "technicianId", COUNT(DISTINCT tt.ticket_id)::int AS count
+       FROM ticket_technicians tt
+       JOIN tickets t ON t.id = tt.ticket_id
+       WHERE t.shadow = false AND t.deleted_at IS NULL ${collabRangeSql}
+       GROUP BY tt.technician_id`,
+      collabParams,
+    );
 
     const contracts = await this.contracts.find({ where: { active: true } });
     const contractMap = new Map(contracts.map((c) => [c.customerId, c]));
@@ -73,7 +98,11 @@ export class ReportsController {
     for (const [id, n] of Object.entries(techLoad)) {
       byTechnician[nameById.get(id) ?? id] = n;
     }
+    const byTechnicianAsCollaborator: Record<string, number> = {};
+    for (const row of collabRows) {
+      byTechnicianAsCollaborator[nameById.get(row.technicianId) ?? row.technicianId] = Number(row.count);
+    }
 
-    return { byStatus, byPriority, byTechnician, slaStatus };
+    return { byStatus, byPriority, byTechnician, byTechnicianAsCollaborator, slaStatus };
   }
 }

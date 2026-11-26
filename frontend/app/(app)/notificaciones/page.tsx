@@ -18,6 +18,7 @@ const TYPE_LABELS: Record<string, string> = {
   ticket_asignado: 'ticket asignado',
   sla_en_riesgo: 'SLA en riesgo',
   tarea_atrasada: 'tarea atrasada',
+  tarea_asignada: 'tarea asignada',
   whatsapp_message: '💬 WhatsApp',
 };
 

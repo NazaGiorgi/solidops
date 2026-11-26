@@ -22,6 +22,8 @@ interface Ticket {
   customer?: { name: string } | null;
   technician?: { user?: { name?: string } } | null;
   technicianId?: string | null;
+  collaborators?: Array<{ id: string; name: string }>;
+  collaboratorCount?: number;
   mergedIntoId?: string | null;
   shadow?: boolean;
   workshop?: { equipmentId: string; contactName?: string | null } | null;
@@ -75,6 +77,9 @@ function TicketsContent({
   const [status, setStatus] = useState('');
   const [merge, setMerge] = useState('');
   const [search, setSearch] = useState('');
+  const [techFilter, setTechFilter] = useState('');
+  const [includeCollaborations, setIncludeCollaborations] = useState(false);
+  const [technicians, setTechnicians] = useState<Array<{ id: string; user?: { name?: string } }>>([]);
   const [loading, setLoading] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
   const [showShadow, setShowShadow] = useState(false);
@@ -93,6 +98,10 @@ function TicketsContent({
     api
       .get<Array<{ id: string; name: string }>>('/ticket-groups')
       .then((gs) => setTicketGroups(gs || []))
+      .catch(() => {});
+    api
+      .get<Array<{ id: string; user?: { name?: string } }>>('/technicians')
+      .then((ts) => setTechnicians(ts || []))
       .catch(() => {});
   }, []);
 
@@ -119,6 +128,12 @@ function TicketsContent({
     if (view) query.push(`view=${encodeURIComponent(view)}`);
     else if (tray) query.push(`tray=${encodeURIComponent(tray)}`);
     if (search) query.push(`search=${encodeURIComponent(search)}`);
+    // technicianId sigue siendo responsable; assignedTo incluye colaboraciones.
+    if (techFilter) {
+      query.push(
+        `${includeCollaborations ? 'assignedTo' : 'technicianId'}=${encodeURIComponent(techFilter)}`,
+      );
+    }
     if (showShadow) query.push('shadow=true');
     if (page) query.push(`page=${page}`);
     if (pageSize) query.push(`take=${pageSize}`);
@@ -145,7 +160,7 @@ function TicketsContent({
     setLoading(true);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, merge, tray, view, customerId, showShadow, page]);
+  }, [status, merge, tray, view, customerId, showShadow, page, techFilter, includeCollaborations]);
 
   // Auto-refresco en vivo (estilo Zammad): ante un ticket nuevo o una
   // respuesta de cliente, recarga la lista en SILENCIO (sin "cargando…" ni
@@ -400,6 +415,20 @@ function TicketsContent({
             <option value="children">solo hijos fusionados</option>
             <option value="exclude">excluir fusionados</option>
           </select>
+          <select className="select" style={{ maxWidth: 180 }} value={techFilter} onChange={(e) => setTechFilter(e.target.value)}>
+            <option value="">todos los técnicos</option>
+            {technicians.map((t) => (
+              <option key={t.id} value={t.id}>{t.user?.name || t.id}</option>
+            ))}
+          </select>
+          <label className="flex" style={{ gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }} title="El filtro de técnico incluye tickets donde es responsable o colaborador">
+            <input
+              type="checkbox"
+              checked={includeCollaborations}
+              onChange={(e) => setIncludeCollaborations(e.target.checked)}
+            />
+            <span className="muted">incluir colaboraciones</span>
+          </label>
           <button
             className={`btn btn-sm ${showShadow ? 'btn-primary' : ''}`}
             onClick={() => setShowShadow((v) => !v)}
@@ -428,7 +457,12 @@ function TicketsContent({
                   mineIds={
                     new Set(
                       tickets
-                        .filter((t) => !!user?.technicianId && t.technicianId === user.technicianId)
+                        .filter(
+                          (t) =>
+                            !!user?.technicianId &&
+                            (t.technicianId === user.technicianId ||
+                              (t.collaborators ?? []).some((c) => c.id === user.technicianId)),
+                        )
                         .map((t) => t.id),
                     )
                   }

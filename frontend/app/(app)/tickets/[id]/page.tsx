@@ -8,6 +8,8 @@ import { Shell } from '../../shell';
 import { PageHeader, Card, Empty, Pill } from '../../../../components/ui';
 import { NotesSection } from '../../../../components/notes-section';
 import { TicketAppointments } from '../../../../components/ticket-appointments';
+import { TasksSection } from '../../../../components/tasks-section';
+import { TechnicianMultiSelect, type TechnicianOption } from '../../../../components/technician-multi-select';
 import { ErrorNotice } from '../../../../components/error-notice';
 import {
   STATUS_PILLS,
@@ -43,6 +45,9 @@ interface TicketDetail {
   site?: { name: string } | null;
   technician?: { id?: string | null; user?: { name?: string } | null } | null;
   technicianId?: string | null;
+  collaborators?: Array<{ id: string; name: string }>;
+  collaboratorCount?: number;
+  collaboratorIds?: string[];
   source?: string;
   shadow?: boolean;
   // Enlace a Taller: presente cuando el ticket está vinculado a un equipo.
@@ -116,7 +121,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   const { user, hasPerm } = useAuth();
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [data, setData] = useState<Partial<TicketDetail>>({});
-  const [technicians, setTechnicians] = useState<Array<{ id: string; user?: { name?: string } }>>([]);
+  const [technicians, setTechnicians] = useState<TechnicianOption[]>([]);
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -148,6 +153,8 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   // Only Supervisor/Coordinador (tickets:assign) may merge tickets; hide the
   // action for Technician instead of showing a button that always 403s.
   const canMerge = hasPerm('tickets:assign');
+  // Asignar responsable y editar colaboradores van juntos.
+  const canAssign = hasPerm('tickets:assign');
 
   // Chequeo de que el cliente es un genérico "Cliente WA ..." autogenerado por
   // WhatsApp. Solo para esos tickets se muestra "Vincular a cliente existente".
@@ -221,6 +228,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
           status: d.status,
           priority: d.priority,
           technicianId: d.technician?.id,
+          collaboratorIds: (d.collaborators ?? []).map((c) => c.id),
         });
       }
       // Load merge candidates: other open tickets of the same customer.
@@ -291,6 +299,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
   async function save() {
     setBusy(true);
     setError('');
+    let warning = '';
     try {
       // P3: when closing the principal, ask which children to close together.
       if (
@@ -299,16 +308,22 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
         (ticket?.mergedChildren?.length ?? 0) > 0
       ) {
         const chosen = closeChildrenIds;
-        await api.post(`/tickets/${params.id}/merge/close`, {
+        const res = await api.post<{ warning?: string }>(`/tickets/${params.id}/merge/close`, {
           closeChildrenIds: chosen,
         });
+        warning = res?.warning || '';
       } else {
-        await api.patch(`/tickets/${params.id}`, data);
+        // Sin tickets:assign se pueden ver los colaboradores, pero no se
+        // envían cambios (el backend igual devolvería 403).
+        const payload = { ...data };
+        if (!canAssign) delete payload.collaboratorIds;
+        const res = await api.patch<{ warning?: string }>(`/tickets/${params.id}`, payload);
+        warning = res?.warning || '';
         // If it WAS principal+children and now closing, fine; otherwise normal.
       }
       await load();
-      setMsg('Guardado');
-      setTimeout(() => setMsg(''), 2500);
+      setMsg(warning || 'Guardado');
+      setTimeout(() => setMsg(''), warning ? 6000 : 2500);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -588,7 +603,7 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
             </select>
           </div>
           <div className="field" style={{ marginBottom: 0 }}>
-            <label>Técnico</label>
+            <label>Responsable</label>
             <select
               className="select"
               value={data.technicianId || ''}
@@ -601,6 +616,21 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
                 </option>
               ))}
             </select>
+          </div>
+          <div style={{ minWidth: 220, marginBottom: 0 }}>
+            <TechnicianMultiSelect
+              technicians={[
+                ...technicians,
+                ...(ticket?.collaborators ?? [])
+                  .filter((c) => !technicians.some((t) => t.id === c.id))
+                  .map((c) => ({ id: c.id, name: c.name })),
+              ]}
+              selected={data.collaboratorIds ?? []}
+              onChange={(ids) => setData((d) => ({ ...d, collaboratorIds: ids }))}
+              label="Colaboradores"
+              disabled={!canAssign}
+              placeholder="sin colaboradores"
+            />
           </div>
           <button className="btn btn-primary" onClick={save} disabled={busy}>
             guardar
@@ -944,7 +974,19 @@ export default function TicketDetail({ params }: { params: { id: string } }) {
       )}
       </div>
 
-      <TicketAppointments ticketId={ticket.id} />
+      <TicketAppointments
+        ticketId={ticket.id}
+        initialSelected={[
+          ...(data.technicianId ? [data.technicianId] : []),
+          ...(data.collaboratorIds ?? []),
+        ]}
+      />
+      <TasksSection
+        ticketId={ticket.id}
+        defaultAssigneeId={
+          technicians.find((t) => t.id === data.technicianId)?.userId ?? user?.id ?? null
+        }
+      />
       <NotesSection ticketId={ticket.id} />
 
       {/* Conversation thread */}

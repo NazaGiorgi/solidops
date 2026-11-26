@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { api } from '../lib/api';
 import { Card, Empty, Pill } from './ui';
 import { formatDate, formatTime } from '../lib/helpers';
+import { TechnicianMultiSelect, type TechnicianOption } from './technician-multi-select';
 
 interface Appointment {
   id: string;
@@ -17,9 +18,13 @@ interface Appointment {
   technicianLinks?: Array<{ technicianId: string; technician?: { user?: { name?: string } } | null }>;
   ticket?: { id: string } | null;
 }
-interface TechnicianOption { id: string; name?: string; user?: { name?: string } }
-
-export function TicketAppointments({ ticketId }: { ticketId: string }) {
+export function TicketAppointments({
+  ticketId,
+  initialSelected = [],
+}: {
+  ticketId: string;
+  initialSelected?: string[];
+}) {
   const [appts, setAppts] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -64,7 +69,14 @@ export function TicketAppointments({ ticketId }: { ticketId: string }) {
           ))}
         </div>
       )}
-      {creating && <AppointmentForm ticketId={ticketId} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); load(); }} />}
+      {creating && (
+        <AppointmentForm
+          ticketId={ticketId}
+          initialSelected={initialSelected}
+          onClose={() => setCreating(false)}
+          onSaved={() => { setCreating(false); load(); }}
+        />
+      )}
     </Card>
   );
 }
@@ -80,18 +92,28 @@ function PillStatus(s: string) {
   return <Pill style={e.style}>{e.label}</Pill>;
 }
 
-function AppointmentForm({ ticketId, onClose, onSaved }: { ticketId: string; onClose: () => void; onSaved: () => void }) {
+function AppointmentForm({
+  ticketId,
+  initialSelected,
+  onClose,
+  onSaved,
+}: {
+  ticketId: string;
+  initialSelected: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const [subject, setSubject] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [duration, setDuration] = useState(60);
-  const [selected, setSelected] = useState<string[]>([]);
+  // El responsable y los colaboradores del ticket vienen preseleccionados; se pueden quitar.
+  const [selected, setSelected] = useState<string[]>(initialSelected);
   const [techs, setTechs] = useState<TechnicianOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [showTechs, setShowTechs] = useState(false);
-  const [techQuery, setTechQuery] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [closeSignal, setCloseSignal] = useState(0);
 
   useEffect(() => {
     api
@@ -100,16 +122,9 @@ function AppointmentForm({ ticketId, onClose, onSaved }: { ticketId: string; onC
       .catch(() => setTechs([]));
   }, []);
 
-  const techName = (t: TechnicianOption) => t.name || t.user?.name || 'Técnico sin nombre';
-  const techOptions = techs.map((t) => ({ id: t.id, label: techName(t) }));
-  const filtered = techOptions.filter((t) => !techQuery || t.label.toLowerCase().includes(techQuery.toLowerCase()));
-
-  function toggle(id: string) {
-    setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
-  }
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setCloseSignal((n) => n + 1);
     if (!date || !time) { setError('Elegí fecha y hora'); return; }
     if (selected.length === 0) { setError('Elegí al menos un técnico'); return; }
     setBusy(true); setError('');
@@ -161,70 +176,13 @@ function AppointmentForm({ ticketId, onClose, onSaved }: { ticketId: string; onC
                 <option value={120}>2 h</option>
               </select>
             </div>
-            <div className="field">
-              <label>Técnicos asignados ({selected.length})</label>
-              <div className="multi-select" style={{ position: 'relative' }}>
-                <button
-                  type="button"
-                  className="input"
-                  style={{ textAlign: 'left', cursor: 'pointer', width: '100%' }}
-                  onClick={() => setShowTechs((v) => !v)}
-                >
-                  {selected.length === 0
-                    ? 'Elegí de la lista…'
-                    : selected
-                        .map((id) => {
-                          const o = techOptions.find((x) => x.id === id);
-                          return o ? o.label : '—';
-                        })
-                        .join(', ')}
-                  <span className="card-meta" style={{ float: 'right' }}>▾</span>
-                </button>
-                {showTechs && (
-                  <div
-                    style={{
-                      position: 'absolute', left: 0, right: 0, top: 'calc(100% + 2px)',
-                      background: 'var(--surface)', border: '1px solid var(--border)',
-                      borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,.08)', zIndex: 20,
-                      maxHeight: 220, overflow: 'auto',
-                    }}
-                  >
-                    <input
-                      className="input"
-                      placeholder="filtrar técnicos…"
-                      value={techQuery}
-                      onChange={(e) => setTechQuery(e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ border: 'none', borderBottom: '1px solid var(--border)', borderRadius: 0, position: 'sticky', top: 0, width: '100%' }}
-                      autoFocus
-                    />
-                    {filtered.length === 0 && (
-                      <div className="card-meta" style={{ padding: '10px 12px' }}>sin resultados</div>
-                    )}
-                    {filtered.map((o) => (
-                      <label
-                        key={o.id}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-                          cursor: 'pointer', background: selected.includes(o.id) ? 'var(--bg-hover)' : 'none',
-                        }}
-                      >
-                        <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} />
-                        <span>{o.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {selected.length > 0 && (
-                <div className="flex wrap" style={{ gap: 4, marginTop: 6 }}>
-                  {selected.map((id) => {
-                    const o = techOptions.find((x) => x.id === id);
-                    return <Pill key={id} style="pill-blue">{o?.label || 'técnico'} <button type="button" className="link" style={{ background:'none', border:'none', padding:0, color:'inherit' }} onClick={() => toggle(id)}>×</button></Pill>;
-                  })}
-                </div>
-              )}
-            </div>
+            <TechnicianMultiSelect
+              technicians={techs}
+              selected={selected}
+              onChange={setSelected}
+              label="Técnicos asignados"
+              closeSignal={closeSignal}
+            />
             <label className="flex" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} />
               <span className="muted" style={{ fontSize: 13 }}>Privado (solo yo lo veo)</span>

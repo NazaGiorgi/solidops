@@ -98,6 +98,7 @@ export enum NotificationType {
   TICKET_ASIGNADO = 'ticket_asignado',
   SLA_EN_RIESGO = 'sla_en_riesgo',
   TAREA_ATRASADA = 'tarea_atrasada',
+  TAREA_ASIGNADA = 'tarea_asignada',
   WHATSAPP_MESSAGE = 'whatsapp_message',
   EMAIL_MESSAGE = 'email_message',
 }

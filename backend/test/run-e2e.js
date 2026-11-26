@@ -14,10 +14,22 @@ process.env.E2E_ALLOW_DB = allowDb;
 process.env.E2E_ADMIN_EMAIL = adminEmail;
 process.env.E2E_ADMIN_PASSWORD = adminPassword;
 
-const jestPath = path.resolve(__dirname, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'jest.cmd' : 'jest');
-const jestArgs = ['--config', path.resolve(__dirname, 'jest-e2e.json')];
+// Invocar el binario JS con el mismo Node evita `spawn EINVAL` al ejecutar
+// jest.cmd desde Windows (Node >= 20) y funciona igual en Linux/macOS.
+const jestPath = path.resolve(__dirname, '..', 'node_modules', 'jest', 'bin', 'jest.js');
+// Un solo worker: el schema se sincroniza al iniciar la app y varias suites en
+// paralelo pueden competir por el mismo índice (idx_document_search_gin).
+// --forceExit: las suites dejan timers abiertos del worker de casillas; Jest ya
+// terminó todos los tests y el runner debe devolver el control igualmente.
+const jestArgs = [
+  jestPath,
+  '--config',
+  path.resolve(__dirname, 'jest-e2e.json'),
+  '--runInBand',
+  '--forceExit',
+];
 
-const child = spawn(jestPath, jestArgs, { stdio: 'inherit', env: process.env });
+const child = spawn(process.execPath, jestArgs, { stdio: 'inherit', env: process.env });
 
 child.on('close', (code) => {
   process.exit(code);

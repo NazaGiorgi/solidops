@@ -9,6 +9,7 @@ interface ReportData {
   byStatus: Record<string, number>;
   byPriority: Record<string, number>;
   byTechnician: Record<string, number>;
+  byTechnicianAsCollaborator: Record<string, number>;
   slaStatus: Record<string, number>;
 }
 
@@ -57,6 +58,17 @@ export default function ReportsPage() {
   useEffect(() => {
     load('all');
   }, [load]);
+
+  // Un mismo técnico puede figurar en las dos columnas: como responsable y
+  // como colaborador. Se muestran ambas sin sumarlas (son cargas distintas).
+  const technicianNames = data
+    ? Array.from(
+        new Set([
+          ...Object.keys(data.byTechnician || {}),
+          ...Object.keys(data.byTechnicianAsCollaborator || {}),
+        ]),
+      ).sort((a, b) => a.localeCompare(b))
+    : [];
 
   return (
     <Shell>
@@ -138,11 +150,44 @@ export default function ReportsPage() {
           </div>
           <div className="grid-3 mt-16">
             <PieChartCard
-              title="Carga por técnico"
+              title="Carga por técnico (responsable)"
               data={Object.entries(data.byTechnician || {})
                 .filter(([, v]) => v > 0)
                 .map(([name, value]) => ({ name, value, color: '#2563eb' }))}
             />
+            <PieChartCard
+              title="Carga como colaborador"
+              data={Object.entries(data.byTechnicianAsCollaborator || {})
+                .filter(([, v]) => v > 0)
+                .map(([name, value]) => ({ name, value, color: 'var(--blue)' }))}
+            />
+          </div>
+          <div className="card mt-16">
+            <h3 className="card-title">Carga por técnico</h3>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Técnico</th>
+                  <th>Responsable</th>
+                  <th>Como colaborador</th>
+                </tr>
+              </thead>
+              <tbody>
+                {technicianNames.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="muted">Sin datos</td>
+                  </tr>
+                ) : (
+                  technicianNames.map((name) => (
+                    <tr key={name}>
+                      <td>{name}</td>
+                      <td>{data?.byTechnician?.[name] ?? 0}</td>
+                      <td>{data?.byTechnicianAsCollaborator?.[name] ?? 0}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </>
       )}

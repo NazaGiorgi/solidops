@@ -112,6 +112,11 @@ services:
       # [DIAG] Guardar el MIME RAW real descargado por IMAP en debug/imap-raw/*.eml.
       # Poner a "1" SOLO para diagnosticar un email concreto; "0" la desactiva.
       IMAP_DEBUG_RAW: "0"
+      # Safety local: evitar envíos de WhatsApp y congelar el worker IMAP sin
+      # tocar .env (producción no define estas variables).
+      WHATSAPP_ACCESS_TOKEN: ""
+      WHATSAPP_PHONE_NUMBER_ID: ""
+      MAILBOX_WORKER_ENABLED: "false"
     volumes:
       - ./backend:/app
       - backend_node_modules:/app/node_modules

@@ -87,6 +87,13 @@ export class UpdateTicketDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  // Reemplaza el conjunto de colaboradores. Requiere `tickets:assign`.
+  // El responsable (technicianId) no puede figurar acá.
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  collaboratorIds?: string[];
 }
 
 export class AssignTicketDto {
@@ -161,6 +168,11 @@ export class ListTicketsQuery {
   @IsOptional()
   @IsUUID()
   technicianId?: string;
+
+  // Responsable O colaborador. No altera el significado de `technicianId`.
+  @IsOptional()
+  @IsUUID()
+  assignedTo?: string;
 
   @IsOptional()
   @IsUUID()

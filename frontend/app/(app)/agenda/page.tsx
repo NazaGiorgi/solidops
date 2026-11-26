@@ -1,18 +1,26 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { Shell } from '../shell';
 import { PageHeader, Card, Empty, Pill } from '../../../components/ui';
 import { ErrorNotice } from '../../../components/error-notice';
 import { ActivityDetailModal, ModalItem } from '../../../components/activity-detail';
+import { TechnicianMultiSelect } from '../../../components/technician-multi-select';
+import { TaskForm } from '../../../components/task-form';
+import { useAuth } from '../../../lib/auth';
 import {
   APPOINTMENT_TYPE_LABELS,
   APPOINTMENT_TYPE_PILLS,
+  RECURRENCE_LABELS,
+  PRIORITY_LABELS,
+  PRIORITY_PILLS,
   TASK_STATUS_PILLS,
   TASK_STATUS_LABELS,
   formatTime,
   formatDay,
+  taskDueLabel,
+  taskDuePill,
 } from '../../../lib/helpers';
 
 interface Appointment {
@@ -23,6 +31,7 @@ interface Appointment {
   endAt: string;
   technicianId?: string | null;
   technician?: { user?: { name?: string } } | null;
+  technicianLinks?: Array<{ technician?: { user?: { name?: string } } | null }>;
   customer?: { name: string } | null;
   ticket?: { id: string } | null;
   isPrivate?: boolean;
@@ -33,22 +42,37 @@ interface Task {
   id: string;
   title: string;
   status: string;
+  priority?: string;
   dueAt: string | null;
+  recurrenceRule?: string | null;
+  relatedEntityType?: 'ticket' | 'customer' | null;
+  relatedEntityId?: string | null;
   assignee?: { name?: string } | null;
 }
 interface Technician {
   id: string;
+  userId?: string | null;
   user?: { name?: string };
 }
 
 type ViewMode = 'day' | 'week' | 'month';
 
+function appointmentTechNames(a: Appointment): string {
+  const linked = (a.technicianLinks ?? [])
+    .map((l) => l.technician?.user?.name)
+    .filter((n): n is string => !!n);
+  if (linked.length) return linked.join(', ');
+  return a.technician?.user?.name || '';
+}
+
 export default function AgendaPage() {
+  const { user, hasPerm } = useAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [showTask, setShowTask] = useState(false);
   const [openItem, setOpenItem] = useState<ModalItem | null>(null);
   const [view, setView] = useState<ViewMode>('week');
   const [anchor, setAnchor] = useState<Date>(new Date());
@@ -56,6 +80,18 @@ export default function AgendaPage() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState<string | null>(null);
+  // `new Date()` difiere entre SSR y el navegador: no renderizar la etiqueta
+  // de la semana hasta después del mount evita el hydration mismatch.
+  const [mounted, setMounted] = useState(false);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
+
+  function flashNotice(message: string) {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(message);
+    noticeTimer.current = setTimeout(() => setNotice(''), 2500);
+  }
 
   // --- data loading ---------------------------------------------------------
   function rangeFor(mode: ViewMode, a: Date): { from: Date; to: Date; label: string } {
@@ -88,18 +124,38 @@ export default function AgendaPage() {
       .get<Appointment[]>(`/appointments?${qs.join('&')}`)
       .then(setAppointments)
       .catch(() => {});
-    api
-      .get<Task[]>(`/tasks?from=${from.toISOString()}&to=${to.toISOString()}`)
+    // La tarjeta Tareas sigue el selector de técnico de arriba: sin filtro se
+    // ve todo el equipo (más las sin asignar); con técnico, sólo sus tareas.
+    const taskQs = [
+      `from=${from.toISOString()}`,
+      `to=${to.toISOString()}`,
+      'includeOverdue=true',
+    ];
+    const taskRequest: Promise<Task[]> = techFilter
+      ? (() => {
+          // assignee_id guarda un user id, no un technician id.
+          const userId = technicians.find((t) => t.id === techFilter)?.userId;
+          return userId
+            ? api.get<Task[]>(`/tasks?${taskQs.join('&')}&assigneeId=${userId}`)
+            : Promise.resolve([]);
+        })()
+      : api.get<Task[]>(`/tasks?${taskQs.join('&')}&team=true`);
+    taskRequest
       .then(setTasks)
-      .catch(() => {})
+      .catch(() => setTasks([]))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
     load();
-    api.get<Technician[]>('/technicians').then(setTechnicians).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, anchor, techFilter]);
+  }, [view, anchor, techFilter, technicians]);
+
+  useEffect(() => {
+    api.get<Technician[]>('/technicians').then(setTechnicians).catch(() => {});
+  }, []);
+
+  useEffect(() => setMounted(true), []);
 
   // --- drag & drop ----------------------------------------------------------
   function onDragStart(e: React.DragEvent, id: string) {
@@ -179,7 +235,7 @@ export default function AgendaPage() {
     <div className="flex wrap">
       <div className="flex">
         <button className="btn btn-sm" onClick={() => shift(-1)}>‹</button>
-        <span style={{ minWidth: 160, textAlign: 'center' }}>{label}</span>
+        <span style={{ minWidth: 160, textAlign: 'center' }}>{mounted ? label : '…'}</span>
         <button className="btn btn-sm" onClick={() => shift(1)}>›</button>
       </div>
       <button className="btn btn-sm" onClick={() => setAnchor(new Date())}>hoy</button>
@@ -195,6 +251,9 @@ export default function AgendaPage() {
         ))}
       </select>
       <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ nuevo turno</button>
+      {hasPerm('calendar:write') && (
+        <button className="btn" onClick={() => setShowTask(true)}>+ nueva tarea</button>
+      )}
     </div>
   );
 
@@ -203,7 +262,28 @@ export default function AgendaPage() {
       <PageHeader title="Agenda" subtitle="Turnos por semana o mes" action={action} />
       {notice && <div className="notice">{notice}</div>}
       {error && <ErrorNotice message={error} onDismiss={() => setError('')} />}
-      {showNew && <NewAppointment onClose={() => setShowNew(false)} onCreate={() => load()} />}
+      {showNew && (
+        <NewAppointment
+          onClose={() => setShowNew(false)}
+          onCreate={() => load()}
+          onNewTask={() => { setShowNew(false); setShowTask(true); }}
+        />
+      )}
+      {showTask && (
+        <TaskForm
+          defaults={{ assigneeId: user?.id ?? null }}
+          onClose={() => setShowTask(false)}
+          onSaved={(task) => {
+            setShowTask(false);
+            load();
+            flashNotice(
+              task?.assigneeId && task.assigneeId !== user?.id
+                ? `Tarea creada y asignada a ${task.assigneeName || 'otra persona'}`
+                : 'Tarea creada',
+            );
+          }}
+        />
+      )}
       {openItem && (
         <ActivityDetailModal item={openItem} onClose={() => setOpenItem(null)} onSaved={() => load()} />
       )}
@@ -211,7 +291,7 @@ export default function AgendaPage() {
       {loading ? (
         <div className="empty">cargando…</div>
       ) : (
-        <div className="grid-3" style={{ gridTemplateColumns: '2fr 1fr' }}>
+        <div className="agenda-layout">
           <Card title={view === 'day' ? 'Día' : view === 'week' ? 'Semana' : 'Mes'}>
             {view === 'day' ? (
               <DayGrid
@@ -253,7 +333,10 @@ export default function AgendaPage() {
               />
             )}
           </Card>
-          <Card title="Tareas" meta={`${tasks.length} en el período`}>
+          <Card
+            title="Tareas"
+            meta={`${tasks.length} en el período · ${techFilter ? technicians.find((t) => t.id === techFilter)?.user?.name || 'técnico' : 'todo el equipo'}`}
+          >
             {tasks.length === 0 ? (
               <Empty message="Sin tareas en el período" />
             ) : (
@@ -265,12 +348,35 @@ export default function AgendaPage() {
                     className="task-row"
                     onClick={() => setOpenItem({ kind: 'task', id: t.id })}
                   >
-                    <div style={{ fontWeight: 500 }}>{t.title}</div>
+                    <div className="flex-between" style={{ gap: 8 }}>
+                      <span style={{ fontWeight: 500 }}>{t.title}</span>
+                      {t.recurrenceRule && t.recurrenceRule !== 'none' && (
+                        <span title={RECURRENCE_LABELS[t.recurrenceRule]}>↻</span>
+                      )}
+                    </div>
                     <div className="flex wrap" style={{ marginTop: 4 }}>
                       <Pill style={TASK_STATUS_PILLS[t.status] || 'pill-gray'}>
                         {TASK_STATUS_LABELS[t.status] || t.status}
                       </Pill>
-                      <span className="card-meta">{t.dueAt ? formatTime(t.dueAt) : '—'}</span>
+                      {t.priority && (
+                        <Pill style={PRIORITY_PILLS[t.priority] || 'pill-gray'}>
+                          {PRIORITY_LABELS[t.priority] || t.priority}
+                        </Pill>
+                      )}
+                      <Pill style={taskDuePill(t.dueAt)}>{taskDueLabel(t.dueAt)}</Pill>
+                      <span className="card-meta">
+                        {t.assignee?.name ? `👤 ${t.assignee.name}` : 'sin responsable'}
+                      </span>
+                      {t.dueAt && <span className="card-meta">{formatTime(t.dueAt)}</span>}
+                      {t.relatedEntityType && t.relatedEntityId && (
+                        <Link
+                          className="link"
+                          href={`/${t.relatedEntityType === 'ticket' ? 'tickets' : 'clientes'}/${t.relatedEntityId}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          ver {t.relatedEntityType}
+                        </Link>
+                      )}
                     </div>
                   </button>
                 ))}
@@ -355,8 +461,8 @@ function DayGrid({
               </div>
               <div style={{ fontWeight: 500, fontSize: 13 }}>{a.subject || 'sin título'}</div>
               {a.customer?.name && <div className="card-meta">{a.customer.name}</div>}
-              {a.technician?.user?.name && (
-                <div className="card-meta">técnico: {a.technician.user.name}</div>
+              {appointmentTechNames(a) && (
+                <div className="card-meta">técnicos: {appointmentTechNames(a)}</div>
               )}
               <select
                 className="select appt-assign"
@@ -454,7 +560,7 @@ function WeekGrid({
               </div>
                   {a.customer?.name && <div className="card-meta">{a.customer.name}</div>}
                   {a.technician?.user?.name && (
-                    <div className="card-meta">técnico: {a.technician.user.name}</div>
+                    <div className="card-meta">técnicos: {appointmentTechNames(a)}</div>
                   )}
                   <select
                     className="select appt-assign"
@@ -546,16 +652,17 @@ function MonthGrid({
 function NewAppointment({
   onClose,
   onCreate,
+  onNewTask,
 }: {
   onClose: () => void;
   onCreate: () => void;
+  onNewTask: () => void;
 }) {
   const [technicians, setTechnicians] = useState<Array<{ id: string; user?: { name?: string } }>>([]);
   const [customers, setCustomers] = useState<Array<{ id: string; name: string }>>([]);
   const [form, setForm] = useState({
     type: 'visita',
     subject: '',
-    technicianId: '',
     customerId: '',
     startAt: '',
     endAt: '',
@@ -563,7 +670,10 @@ function NewAppointment({
     reminderMinutes: '0',
     isPrivate: false,
   });
+  const [selectedTechIds, setSelectedTechIds] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [endError, setEndError] = useState('');
+  const [closeSignal, setCloseSignal] = useState(0);
 
   useEffect(() => {
     api.get<Array<{ id: string; user?: { name?: string } }>>('/technicians').then(setTechnicians).catch(() => {});
@@ -572,11 +682,22 @@ function NewAppointment({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Cerrar siempre el multi-select al enviar, incluso si la validación falla.
+    setCloseSignal((n) => n + 1);
     setError('');
+    setEndError('');
+    if (!form.startAt) { setError('Falta la hora de inicio'); return; }
+    if (!form.endAt) { setError('Falta la hora de fin'); return; }
+    if (new Date(form.endAt).getTime() <= new Date(form.startAt).getTime()) {
+      setEndError('La hora de fin debe ser posterior a la de inicio');
+      setError('Revisá la hora de fin');
+      return;
+    }
     try {
       await api.post('/appointments', {
         ...form,
-        technicianId: form.technicianId || null,
+        technicianId: selectedTechIds[0] || null,
+        technicianIds: selectedTechIds,
         customerId: form.customerId || null,
         reminderMinutes: Number(form.reminderMinutes) || null,
         isPrivate: !!form.isPrivate,
@@ -590,6 +711,22 @@ function NewAppointment({
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
+  function setStart(value: string) {
+    setForm((f) => ({ ...f, startAt: value, endAt: value ? addOneHourToLocalInput(value) : f.endAt }));
+    setEndError('');
+    setError('');
+  }
+
+  function setEnd(value: string) {
+    setForm((f) => ({ ...f, endAt: value }));
+    setEndError(
+      form.startAt && value && new Date(value).getTime() <= new Date(form.startAt).getTime()
+        ? 'La hora de fin debe ser posterior a la de inicio'
+        : '',
+    );
+    setError('');
+  }
+
   return (
     <div className="card mb-16">
       <h3 className="card-title">Nuevo turno</h3>
@@ -601,21 +738,23 @@ function NewAppointment({
             <option value="reunion">reunión</option>
             <option value="visita">visita</option>
             <option value="guardia">guardia</option>
-            <option value="tarea">tarea</option>
           </select>
+          <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+            ¿Es algo sin hora fija? <button type="button" className="link" onClick={onNewTask}>Creá una tarea</button>
+          </div>
         </div>
         <div className="field">
           <label>Asunto</label>
           <input className="input" value={form.subject} onChange={(e) => set('subject', e.target.value)} />
         </div>
         <div className="field">
-          <label>Técnico</label>
-          <select className="select" value={form.technicianId} onChange={(e) => set('technicianId', e.target.value)}>
-            <option value="">sin asignar</option>
-            {technicians.map((t) => (
-              <option key={t.id} value={t.id}>{t.user?.name || t.id}</option>
-            ))}
-          </select>
+          <TechnicianMultiSelect
+            technicians={technicians}
+            selected={selectedTechIds}
+            onChange={setSelectedTechIds}
+            label="Técnicos"
+            closeSignal={closeSignal}
+          />
         </div>
         <div className="field">
           <label>Cliente</label>
@@ -628,11 +767,23 @@ function NewAppointment({
         </div>
         <div className="field">
           <label>Inicio</label>
-          <input className="input" type="datetime-local" value={form.startAt} onChange={(e) => set('startAt', e.target.value)} required />
+          <input className="input" type="datetime-local" value={form.startAt} onChange={(e) => setStart(e.target.value)} />
         </div>
         <div className="field">
           <label>Fin</label>
-          <input className="input" type="datetime-local" value={form.endAt} onChange={(e) => set('endAt', e.target.value)} required />
+          <input
+            className="input"
+            type="datetime-local"
+            value={form.endAt}
+            onChange={(e) => setEnd(e.target.value)}
+            aria-invalid={!!endError}
+            style={endError ? { borderColor: '#dc2626' } : undefined}
+          />
+          {endError && (
+            <div className="notice notice-error" style={{ marginTop: 4, padding: '4px 8px', fontSize: 12 }}>
+              {endError}
+            </div>
+          )}
         </div>
         <div className="field">
           <label>Notas</label>
@@ -665,6 +816,16 @@ function NewAppointment({
 }
 
 // --- date helpers ------------------------------------------------------------
+// datetime-local guarda hora local sin zona; sumar sobre Date y reformatear
+// mantiene el valor editable y consistente con el input.
+function addOneHourToLocalInput(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  d.setHours(d.getHours() + 1);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function startOfWeek(d: Date): Date {
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day; // Monday start
