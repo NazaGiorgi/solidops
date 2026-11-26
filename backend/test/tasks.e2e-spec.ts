@@ -10,8 +10,9 @@ import { assertIsolatedTestDb } from './test-db.guard';
 
 jest.setTimeout(120000);
 
-// Pruebas 1-9 del prompt de Tareas, ejecutadas sólo contra ops_msp_e2e.
+// Pruebas del prompt de Tareas, ejecutadas sólo contra ops_msp_e2e.
 // La prueba 10 (blindaje de salidas a clientes) se verifica además fuera de Jest.
+// Las pruebas 14-15 cubren el contrato del refresco sin F5 de Mi día.
 describe('Tareas pendientes - correcciones e2e', () => {
   let app: INestApplication;
   let moduleFixture: TestingModule;
@@ -443,5 +444,62 @@ describe('Tareas pendientes - correcciones e2e', () => {
     expect(ids).toContain(unassigned.id);
     expect(ids).not.toContain(theirs.id);
     evidence('prueba-13', { mine: mine.id, unassigned: unassigned.id, excluded: theirs.id });
+  });
+
+  it('14 - crear para mañana asignada a mí: la respuesta trae el responsable y el primer Mi día ya la muestra en próximas', async () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+    const task = await createTask({
+      title: `__e2e refresco mi día mañana ${suffix}`,
+      assigneeId: anaUserId,
+      dueAt: tomorrow.toISOString(),
+    });
+    // TaskForm arma el aviso con el assigneeId devuelto por POST /tasks.
+    expect(task.assigneeId).toBe(anaUserId);
+    // Sin recargar: el primer GET posterior a la creación ya incluye la tarea.
+    const found = (await myDay(adminToken)).find((t: any) => t.id === task.id);
+    expect(found).toBeDefined();
+    expect(new Date(found.dueAt).toDateString()).toBe(tomorrow.toDateString());
+    // El frontend ubica esta fecha en "próximas" (después de hoy, antes de sin fecha).
+    expect(new Date(found.dueAt).getTime()).toBeGreaterThan(Date.now());
+    evidence('prueba-14', {
+      taskId: task.id,
+      assigneeId: task.assigneeId,
+      dueAt: found.dueAt,
+      state: 'upcoming',
+    });
+  });
+
+  it('15 - asignada a otra persona: el aviso puede resolver el nombre y Mi día no la muestra', async () => {
+    const task = await createTask({
+      title: `__e2e refresco mi día ajena ${suffix}`,
+      assigneeId: mariaUserId,
+      dueAt: new Date(Date.now() + 86400000).toISOString(),
+    });
+    expect(task.assigneeId).toBe(mariaUserId);
+    expect(task.assigneeId).not.toBe(anaUserId);
+
+    // TaskForm resuelve el nombre del responsable desde /technicians (userId).
+    const techs = await request(app.getHttpServer())
+      .get('/api/technicians')
+      .set(auth(adminToken))
+      .expect(200);
+    const assigneeName = (techs.body as any[]).find(
+      (t) => t.userId === task.assigneeId,
+    )?.user?.name;
+    expect(typeof assigneeName).toBe('string');
+    expect(assigneeName.length).toBeGreaterThan(0);
+
+    // El aviso "no aparece acá porque no es tuya" debe ser verdadero.
+    expect((await myDay(adminToken)).some((t: any) => t.id === task.id)).toBe(false);
+    expect((await myDay(mariaToken)).some((t: any) => t.id === task.id)).toBe(true);
+    evidence('prueba-15', {
+      taskId: task.id,
+      assigneeId: task.assigneeId,
+      assigneeName,
+      inAnaMyDay: false,
+      inMariaMyDay: true,
+    });
   });
 });
